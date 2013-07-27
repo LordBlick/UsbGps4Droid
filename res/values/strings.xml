@@ -39,7 +39,9 @@
     <string name="pref_mock_gps_name_title">Mock location provider name</string>
     <string name="pref_mock_gps_name_summary">Usb GPS name: %s</string>
     <string name="pref_connection_retries_title">Connection retry number</string>
-    <string name="pref_connection_retries_summary">Number of attempts before exiting: %s</string>
+    <plurals name="pref_connection_retries_summary">
+        <item quantity="other">Number of attempts before exiting: %s</item>
+	</plurals>
     <string name="pref_recording_title">Enable/Disable NMEA log</string>
     <string name="pref_recording_summary_off">Track recording is off</string>
     <string name="pref_recording_summary_on">Track recording is on</string>

@@ -3,6 +3,7 @@
 	Copyright (C) 2010, 2011, 2012, 2013 Herbert von Broeuschmeul
 	Copyright (C) 2010, 2011, 2012, 2013 BluetoothGPS4Droid Project
 	Copyright (C) 2011, 2012, 2013 UsbGPS4Droid Project
+	Copyright (C) 2013 Alexey Illarionov
 	  
 	This file is part of UsbGPS4Droid.
 	
@@ -24,17 +25,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
       package="org.broeuschmeul.android.gps.usb.provider"
       android:versionCode="127"
-      android:versionName="@string/versionName">
+      android:versionName="1.0 beta2">
       
     <uses-feature android:name="android.hardware.usb.host" />
-	<uses-sdk android:targetSdkVersion="16" android:minSdkVersion="12" />
+	<uses-sdk android:targetSdkVersion="18" android:minSdkVersion="12" />
     
 	<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 	<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 	<uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION" />
 	
-    <application android:icon="@drawable/ic_launcher_bluegps" android:label="@string/app_name" android:allowClearUserData="true">
-        <activity android:name="org.broeuschmeul.android.gps.bluetooth.provider.BluetoothGpsActivity"
+    <application
+        android:icon="@drawable/ic_launcher_bluegps"
+        android:label="@string/app_name"
+        android:allowBackup="true" >
+        <activity android:name=".UsbGpsActivity"
                   android:label="@string/app_name"
                   android:launchMode="singleTask" >
             <intent-filter>
@@ -46,28 +50,17 @@
             </intent-filter>
             <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" android:resource="@xml/device_filter" />
         </activity>
-
-<!--  
-		<service android:name=".BluetoothGpsProviderService" android:enabled="true" android:exported="true" android:process=":BluetoothGpsProviderService" >
--->
-		<service android:name="org.broeuschmeul.android.gps.bluetooth.provider.BluetoothGpsProviderService" android:enabled="true" android:exported="true" >
+		
+		<service
+		    android:name=".UsbGpsProviderService"
+		    android:exported="false" >
 			<intent-filter>
-				<action android:name="org.broeuschmeul.android.gps.usb.tracker.nmea.intent.action.START_TRACK_RECORDING">
-					<category android:name="android.intent.category.DEFAULT" />
-				</action>
-				<action android:name="org.broeuschmeul.android.gps.usb.tracker.nmea.intent.action.STOP_TRACK_RECORDING">
-					<category android:name="android.intent.category.DEFAULT" />
-				</action>
-				<action android:name="org.broeuschmeul.android.gps.usb.provider.nmea.intent.action.START_GPS_PROVIDER">
-					<category android:name="android.intent.category.DEFAULT" />
-				</action>
-				<action android:name="org.broeuschmeul.android.gps.usb.provider.nmea.intent.action.STOP_GPS_PROVIDER">
-					<category android:name="android.intent.category.DEFAULT" />
-				</action>
-				<action android:name="org.broeuschmeul.android.gps.usb.provider.nmea.intent.action.CONFIGURE_SIRF_GPS">
-					<category android:name="android.intent.category.DEFAULT" />
-				</action>
-			</intent-filter>			
+				<action android:name="org.broeuschmeul.android.gps.usb.tracker.nmea.intent.action.START_TRACK_RECORDING" />
+				<action android:name="org.broeuschmeul.android.gps.usb.tracker.nmea.intent.action.STOP_TRACK_RECORDING" />
+				<action android:name=".nmea.intent.action.START_GPS_PROVIDER" />
+				<action android:name=".nmea.intent.action.STOP_GPS_PROVIDER" />
+				<action android:name=".nmea.intent.action.CONFIGURE_SIRF_GPS" />
+			</intent-filter>
 		</service>
 
     </application>

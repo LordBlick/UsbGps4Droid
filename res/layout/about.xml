@@ -28,7 +28,7 @@
 	>
 	<LinearLayout
 		android:layout_width="fill_parent"
-		android:layout_height="fill_parent"
+		android:layout_height="wrap_content"
 		android:orientation="vertical"
 	>
 		<LinearLayout
@@ -43,10 +43,10 @@
 				android:text="@string/about_version"
 			/>
 			<TextView
+			    android:id="@+id/about_version"
 				android:layout_width="wrap_content"
 				android:layout_height="wrap_content"
 				style="@style/about_text"
-				android:text="@string/versionName"
 			/>
 		</LinearLayout>
 <!-- 		
@@ -63,12 +63,12 @@
 			style="@style/about_text"
 			android:text="@string/about_app_desc"
 		/>
+
 		<TextView
-			android:id="@+id/about_license"
-			style="@style/about_text"
- 			android:text="@string/about_license"
- 			android:autoLink="none"
-		/>
+		    android:id="@+id/about_license"
+		    style="@style/about_text"
+		    android:text="@string/about_license" />
+
 		<TextView
 			android:id="@+id/about_sources"
 			style="@style/about_text"

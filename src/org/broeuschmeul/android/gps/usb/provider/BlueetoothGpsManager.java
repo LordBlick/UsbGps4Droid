@@ -2,30 +2,52 @@
  * Copyright (C) 2010, 2011, 2012 Herbert von Broeuschmeul
  * Copyright (C) 2010, 2011, 2012 BluetoothGPS4Droid Project
  * Copyright (C) 2011, 2012 UsbGPS4Droid Project
- * 
+ *
  * This file is part of UsbGPS4Droid.
  *
  * UsbGPS4Droid is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- * 
+ *
  * UsbGPS4Droid is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  *  You should have received a copy of the GNU General Public License
  *  along with UsbGPS4Droid. If not, see <http://www.gnu.org/licenses/>.
  */
 
-package org.broeuschmeul.android.gps.bluetooth.provider;
+package org.broeuschmeul.android.gps.usb.provider;
+
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.hardware.usb.UsbConstants;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbDeviceConnection;
+import android.hardware.usb.UsbEndpoint;
+import android.hardware.usb.UsbInterface;
+import android.hardware.usb.UsbManager;
+import android.location.GpsStatus.NmeaListener;
+import android.location.LocationManager;
+import android.os.Bundle;
+import android.os.SystemClock;
+import android.preference.PreferenceManager;
+import android.provider.Settings;
+import android.util.Log;
+
+import org.broeuschmeul.android.gps.nmea.util.NmeaParser;
+import org.broeuschmeul.android.gps.sirf.util.SirfUtils;
 
 import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -35,51 +57,17 @@ import java.io.UnsupportedEncodingException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-import org.broeuschmeul.android.gps.usb.provider.BuildConfig;
-import org.broeuschmeul.android.gps.usb.provider.R;
-import org.broeuschmeul.android.gps.nmea.util.NmeaParser;
-import org.broeuschmeul.android.gps.sirf.util.SirfUtils;
-
-import android.app.Notification;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
-import android.app.Service;
-import android.content.BroadcastReceiver;
-//import android.bluetooth.BluetoothAdapter;
-//import android.bluetooth.BluetoothDevice;
-//import android.bluetooth.BluetoothSocket;
-import android.content.Context;
-import android.content.IntentFilter;
-import android.content.SharedPreferences;
-import android.content.Intent;
-import android.hardware.usb.UsbConstants;
-import android.hardware.usb.UsbDevice;
-import android.hardware.usb.UsbDeviceConnection;
-import android.hardware.usb.UsbEndpoint;
-import android.hardware.usb.UsbInterface;
-import android.hardware.usb.UsbManager;
-import android.hardware.usb.UsbRequest;
-import android.location.LocationManager;
-import android.location.GpsStatus.NmeaListener;
-import android.preference.PreferenceManager;
-import android.provider.Settings;
-import android.os.Bundle;
-import android.os.SystemClock;
-import android.util.Log;
-
 /**
  * This class is used to establish and manage the connection with the bluetooth GPS.
- * 
+ *
  * @author Herbert von Broeuschmeul
  *
  */
@@ -95,7 +83,8 @@ public class BlueetoothGpsManager {
 	private static final String ACTION_USB_PERMISSION = "com.android.example.USB_PERMISSION";
 	private final BroadcastReceiver mUsbReceiver = new BroadcastReceiver() {
 
-		public void onReceive(Context context, Intent intent) {
+		@Override
+        public void onReceive(Context context, Intent intent) {
 			String action = intent.getAction();
 			if (ACTION_USB_PERMISSION.equals(action)) {
 				synchronized (this) {
@@ -112,11 +101,6 @@ public class BlueetoothGpsManager {
 				            		Log.v(LOG_TAG, "will use default device speed: " + defaultDeviceSpeed);
 				            		deviceSpeed = defaultDeviceSpeed;
 				            	}
-//								// reset eventual disabling cause
-//								// setDisableReason(0);
-//								// connection obtained so reset the number of connection try
-//								nbRetriesRemaining = 1+maxConnectionRetries ;
-//								notificationManager.cancel(R.string.connection_problem_notification_title);
 			        			Log.v(LOG_TAG, "starting usb reading task");
 								connectedGps = new ConnectedGps(device, deviceSpeed);
 								connectionAndReadingPool.execute(connectedGps);
@@ -134,47 +118,40 @@ public class BlueetoothGpsManager {
 	/**
 	 * A utility class used to manage the communication with the bluetooth GPS whn the connection has been established.
 	 * It is used to read NMEA data from the GPS or to send SIRF III binary commands or SIRF III NMEA commands to the GPS.
-	 * You should run the main read loop in one thread and send the commands in a separate one.   
-	 * 
+	 * You should run the main read loop in one thread and send the commands in a separate one.
+	 *
 	 * @author Herbert von Broeuschmeul
 	 *
 	 */
 	private class ConnectedGps extends Thread {
-		/**
-		 * GPS bluetooth socket used for communication. 
-		 */
-		private final File gpsDev ;
-		private final UsbDevice gpsUsbDev ;
 		private final UsbInterface intf;
 		private UsbEndpoint endpointIn = null;
 		private UsbEndpoint endpointOut = null;
 		private final UsbDeviceConnection connection;
 		private boolean closed = false;
 		/**
-		 * GPS InputStream from which we read data. 
+		 * GPS InputStream from which we read data.
 		 */
 		private final InputStream in;
 		/**
-		 * GPS output stream to which we send data (SIRF III binary commands). 
+		 * GPS output stream to which we send data (SIRF III binary commands).
 		 */
 		private final OutputStream out;
 		/**
-		 * GPS output stream to which we send data (SIRF III NMEA commands). 
+		 * GPS output stream to which we send data (SIRF III NMEA commands).
 		 */
 		private final PrintStream out2;
 		/**
-		 * A boolean which indicates if the GPS is ready to receive data. 
+		 * A boolean which indicates if the GPS is ready to receive data.
 		 * In fact we consider that the GPS is ready when it begins to sends data...
 		 */
 		private boolean ready = false;
 
 		public ConnectedGps(UsbDevice device) {
-			this(device, defaultDeviceSpeed);			
+			this(device, defaultDeviceSpeed);
 		}
 
 		public ConnectedGps(UsbDevice device, String deviceSpeed) {
-			this.gpsDev = null;
-			this.gpsUsbDev = device;			
 			intf = device.getInterface(0);
 			int i = intf.getEndpointCount();
 			endpointIn = null;
@@ -198,11 +175,11 @@ public class BlueetoothGpsManager {
 			Log.d(LOG_TAG, "claiming interface");
 			resclaim = connection.claimInterface(intf, true);
 			Log.d(LOG_TAG, "data claim"+ resclaim);
-			
+
 			InputStream tmpIn = null;
 			OutputStream tmpOut = null;
 			PrintStream tmpOut2 = null;
-			
+
 			tmpIn = new InputStream() {
 				private byte[] buffer = new byte[128];
 				private byte[] usbBuffer = new byte[64];
@@ -210,8 +187,8 @@ public class BlueetoothGpsManager {
 				private ByteBuffer bufferWrite = ByteBuffer.wrap(buffer);
 				private ByteBuffer bufferRead = (ByteBuffer)ByteBuffer.wrap(buffer).limit(0);
 				private boolean closed = false;
-				
-				@Override
+
+                @Override
 				public int read() throws IOException {
 					int b = 0;
 					if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, "trying to read data");
@@ -222,7 +199,7 @@ public class BlueetoothGpsManager {
 					if (nb > 0){
 						b = oneByteBuffer[0];
 					} else {
-						// TODO : if nb = 0 then we have a pb 
+						// TODO : if nb = 0 then we have a pb
 						b = -1;
 						Log.e(LOG_TAG, "data read() error code: " + nb );
 					}
@@ -280,7 +257,7 @@ public class BlueetoothGpsManager {
 							if (n > bufferWrite.remaining()){
 								bufferRead.rewind();
 								bufferWrite.clear();
-							} 
+							}
 							bufferWrite.put(usbBuffer, 0, n);
 							bufferRead.limit(bufferWrite.position());
 //							if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, "data read: nb: " + n + " current: " + bufferRead.position() + " limit: " + bufferRead.limit() + " " + Arrays.toString(bufferRead.array()));
@@ -338,7 +315,7 @@ public class BlueetoothGpsManager {
 					closed = true;
 				}
 			};
-			
+
 			tmpOut = new OutputStream() {
 				private byte[] buffer = new byte[128];
 				private byte[] usbBuffer = new byte[64];
@@ -346,7 +323,7 @@ public class BlueetoothGpsManager {
 				private ByteBuffer bufferWrite = ByteBuffer.wrap(buffer);
 				private ByteBuffer bufferRead = (ByteBuffer)ByteBuffer.wrap(buffer).limit(0);
 				private boolean closed = false;
-				
+
 				@Override
 				public void write(int oneByte) throws IOException {
 					if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, "trying to write data (one byte): " + oneByte + " char: " + (char)oneByte);
@@ -367,7 +344,7 @@ public class BlueetoothGpsManager {
 					if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, "trying to write data : " + Arrays.toString(this.buffer));
 					int n = 0;
 					if (! closed){
-						n = connection.bulkTransfer(endpointOut, this.buffer, count, TIMEOUT);	
+						n = connection.bulkTransfer(endpointOut, this.buffer, count, TIMEOUT);
 					} else {
 						Log.e(LOG_TAG, "error while trying to write data: outputStream closed");
 					}
@@ -405,9 +382,9 @@ public class BlueetoothGpsManager {
 					// TODO Auto-generated method stub
 					super.write(buffer);
 				}
-				
+
 			};
-			
+
 			try {
 				if (tmpOut != null){
 					tmpOut2 = new PrintStream(tmpOut, false, "US-ASCII");
@@ -452,7 +429,7 @@ public class BlueetoothGpsManager {
 //					final byte[] datax = new byte[7];
 //					final ByteBuffer connectionSpeedInfoBuffer = ByteBuffer.wrap(datax,0,7).order(java.nio.ByteOrder.LITTLE_ENDIAN);
 					try {
-						int res0 = connection.controlTransfer(0xA1, 33, 0, 0, datax, 7, 0); 
+						int res0 = connection.controlTransfer(0xA1, 33, 0, 0, datax, 7, 0);
 						BlueetoothGpsManager.this.deviceSpeed = Integer.toString(connectionSpeedInfoBuffer.getInt(0));
 						Log.e(LOG_TAG, "info connection: " + Arrays.toString(datax));
 						Log.e(LOG_TAG, "info connection speed: " + BlueetoothGpsManager.this.deviceSpeed);
@@ -464,7 +441,7 @@ public class BlueetoothGpsManager {
 								Log.e(LOG_TAG, "trying to use speed " + speed);
 								Log.d(LOG_TAG, "initializing connection:  " + speed + " baud and 8N1 (0 bits no parity 1 stop bit");
 								connectionSpeedBuffer.putInt(0, speed);
-								int res2 = connection.controlTransfer(0x21, 32, 0, 0, data, 7, 0); 
+								int res2 = connection.controlTransfer(0x21, 32, 0, 0, data, 7, 0);
 								if (sirfGps){
 									Log.e(LOG_TAG, "trying to switch from SiRF binaray to NMEA");
 									connection.bulkTransfer(endpointOut, sirfBin2Nmea, sirfBin2Nmea.length, 0);
@@ -473,7 +450,7 @@ public class BlueetoothGpsManager {
 								Thread.sleep(4000);
 							}
 						}
-						res0 = connection.controlTransfer(0xA1, 33, 0, 0, datax, 7, 0); 
+						res0 = connection.controlTransfer(0xA1, 33, 0, 0, datax, 7, 0);
 						Log.e(LOG_TAG, "info connection: " + Arrays.toString(datax));
 						Log.e(LOG_TAG, "info connection speed: " + connectionSpeedInfoBuffer.getInt(0));
 						if (! closed) {
@@ -496,13 +473,14 @@ public class BlueetoothGpsManager {
 			ready = false;
 			autoConf.start();
 		}
-	
+
 		public boolean isReady(){
 			return ready;
 		}
-		
+
 		private long lastRead = 0;
-		public void run() {
+		@Override
+        public void run() {
 			try {
 				BufferedReader reader = new BufferedReader(new InputStreamReader(in,"US-ASCII"),128);
 //				InputStreamReader reader = new InputStreamReader(in,"US-ASCII");
@@ -583,7 +561,7 @@ public class BlueetoothGpsManager {
 				Log.e(LOG_TAG, "Exception during write", e);
 			}
 		}
-		
+
 		public void close(){
 			ready = false;
 			closed = true;
@@ -629,7 +607,7 @@ public class BlueetoothGpsManager {
 	private boolean enabled = false;
 	private ExecutorService notificationPool;
 	private ScheduledExecutorService connectionAndReadingPool;
-	private List<NmeaListener> nmeaListeners = Collections.synchronizedList(new LinkedList<NmeaListener>()); 
+	private List<NmeaListener> nmeaListeners = Collections.synchronizedList(new LinkedList<NmeaListener>());
 	private LocationManager locationManager;
 	private SharedPreferences sharedPreferences;
 	private ConnectedGps connectedGps;
@@ -659,27 +637,27 @@ public class BlueetoothGpsManager {
 		this.appContext = callingService.getApplicationContext();
 		locationManager = (LocationManager)callingService.getSystemService(Context.LOCATION_SERVICE);
 		sharedPreferences = PreferenceManager.getDefaultSharedPreferences(callingService);
-		deviceSpeed = sharedPreferences.getString(BluetoothGpsProviderService.PREF_GPS_DEVICE_SPEED, callingService.getString(R.string.defaultGpsDeviceSpeed));
+		deviceSpeed = sharedPreferences.getString(UsbGpsProviderService.PREF_GPS_DEVICE_SPEED, callingService.getString(R.string.defaultGpsDeviceSpeed));
 		defaultDeviceSpeed = callingService.getString(R.string.defaultGpsDeviceSpeed);
 		setDeviceSpeed = !deviceSpeed.equals(callingService.getString(R.string.autoGpsDeviceSpeed));
-		sirfGps = sharedPreferences.getBoolean(BluetoothGpsProviderService.PREF_SIRF_GPS, false);
+		sirfGps = sharedPreferences.getBoolean(UsbGpsProviderService.PREF_SIRF_GPS, false);
 		notificationManager = (NotificationManager)callingService.getSystemService(Context.NOTIFICATION_SERVICE);
-		parser.setLocationManager(locationManager);	
-		
+		parser.setLocationManager(locationManager);
+
 		connectionProblemNotification = new Notification();
 		connectionProblemNotification.icon = R.drawable.ic_stat_notify;
-		Intent stopIntent = new Intent(BluetoothGpsProviderService.ACTION_STOP_GPS_PROVIDER);
+		Intent stopIntent = new Intent(UsbGpsProviderService.ACTION_STOP_GPS_PROVIDER);
 		// PendingIntent stopPendingIntent = PendingIntent.getService(appContext, 0, stopIntent, PendingIntent.FLAG_CANCEL_CURRENT);
 		PendingIntent stopPendingIntent = PendingIntent.getService(appContext, 0, stopIntent, PendingIntent.FLAG_CANCEL_CURRENT);
 		connectionProblemNotification.contentIntent = stopPendingIntent;
 
 		serviceStoppedNotification = new Notification();
 		serviceStoppedNotification.icon=R.drawable.ic_stat_notify;
-		Intent restartIntent = new Intent(BluetoothGpsProviderService.ACTION_START_GPS_PROVIDER);
+		Intent restartIntent = new Intent(UsbGpsProviderService.ACTION_START_GPS_PROVIDER);
 		PendingIntent restartPendingIntent = PendingIntent.getService(appContext, 0, restartIntent, PendingIntent.FLAG_CANCEL_CURRENT);
-		serviceStoppedNotification.setLatestEventInfo(appContext, 
-				appContext.getString(R.string.service_closed_because_connection_problem_notification_title), 
-				appContext.getString(R.string.service_closed_because_connection_problem_notification), 
+		serviceStoppedNotification.setLatestEventInfo(appContext,
+				appContext.getString(R.string.service_closed_because_connection_problem_notification_title),
+				appContext.getString(R.string.service_closed_because_connection_problem_notification),
 				restartPendingIntent);
 
         usbManager = (UsbManager) callingService.getSystemService(callingService.USB_SERVICE);
@@ -689,14 +667,14 @@ public class BlueetoothGpsManager {
 	private void setDisableReason(int reasonId){
 		disableReason = reasonId;
 	}
-	
+
 	/**
 	 * @return
 	 */
 	public int getDisableReason(){
 		return disableReason;
 	}
-	
+
 	/**
 	 * @return true if the bluetooth GPS is enabled
 	 */
@@ -713,237 +691,63 @@ public class BlueetoothGpsManager {
 		notificationManager.cancel(R.string.service_closed_because_connection_problem_notification_title);
 		if (! enabled){
         	Log.d(LOG_TAG, "enabling Bluetooth GPS manager");
-//			final BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
-//	        if (bluetoothAdapter == null) {
-//	            // Device does not support Bluetooth
-//	        	Log.e(LOG_TAG, "Device does not support Bluetooth");
-//	        	disable(R.string.msg_bluetooth_unsupported);
-//	        } else if (!bluetoothAdapter.isEnabled()) {
-//	        	// Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
-//	        	// startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT);
-//	        	Log.e(LOG_TAG, "Bluetooth is not enabled");
-//	        	disable(R.string.msg_bluetooth_disabled);
-//	        } else 
 	        if (Settings.Secure.getInt(callingService.getContentResolver(),Settings.Secure.ALLOW_MOCK_LOCATION, 0)==0){
 	        	Log.e(LOG_TAG, "Mock location provider OFF");
 	        	disable(R.string.msg_mock_location_disabled);
-//	        } else if ( (! locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER))
-//	        		 && (sharedPreferences.getBoolean(BluetoothGpsProviderService.PREF_REPLACE_STD_GPS, true))
-//	        			) {
-//	        	Log.e(LOG_TAG, "GPS location provider OFF");
-//	        	disable(R.string.msg_gps_provider_disabled);
 	        } else {
-//				final BluetoothDevice gpsDevice = bluetoothAdapter.getRemoteDevice(gpsDeviceAddress);
 				final String gpsDevice = gpsDeviceAddress;
 				if (gpsDevice == null || "".equals(gpsDevice)){
-					Log.e(LOG_TAG, "GPS device not found");       	    	
+					Log.e(LOG_TAG, "GPS device not found");
 		        	disable(R.string.msg_gps_unavaible);
 				} else {
 	    			Log.e(LOG_TAG, "current device: "+gpsDevice );
-//					try {
-//						gpsSocket = gpsDevice.createRfcommSocketToServiceRecord(UUID.fromString("00001101-0000-1000-8000-00805F9B34FB"));
-//						gpsDev = new File(gpsDeviceAddress);
 						gpsDev = usbManager.getDeviceList().get(gpsDevice);
-//					} catch (IOException e) {
-//	    				Log.e(LOG_TAG, "Error during connection", e);
-//	    				gpsDev = null;
-//					}
 					if (gpsDev == null){
 	    				Log.e(LOG_TAG, "Error while establishing connection: no device");
 			        	disable(R.string.msg_gps_unavaible);
 					} else {
-						Runnable connectThread = new Runnable() {							
-							@Override
-							public void run() {
-								try {
-									connected = false;
-									Log.v(LOG_TAG, "current device: "+gpsDevice);
-									if (/*(bluetoothAdapter.isEnabled()) && */(nbRetriesRemaining > 0 )){										
-//										try {
-											if (connectedGps != null){
-												connectedGps.close();
-											}
-								            PendingIntent permissionIntent = PendingIntent.getBroadcast(callingService, 0, new Intent(ACTION_USB_PERMISSION), 0);
-//								            HashMap<String, UsbDevice> connectedUsbDevices = usbManager.getDeviceList();
-//								            UsbDevice device = connectedUsbDevices.values().iterator().next();
-											gpsDev = usbManager.getDeviceList().get(gpsDevice);
-								            UsbDevice device = gpsDev;
-								            if (device != null && usbManager.hasPermission(device)){
-							        			Log.d(LOG_TAG, "We have permession, good!");
-								            	connected = true;
-								            	if (setDeviceSpeed){
-								            		Log.v(LOG_TAG, "will set devive speed: " + deviceSpeed);
-								            	} else {
-								            		Log.v(LOG_TAG, "will use default device speed: " + defaultDeviceSpeed);
-								            		deviceSpeed = defaultDeviceSpeed;
-								            	}
-//												// reset eventual disabling cause
-//												// setDisableReason(0);
-//												// connection obtained so reset the number of connection try
-//												nbRetriesRemaining = 1+maxConnectionRetries ;
-//												notificationManager.cancel(R.string.connection_problem_notification_title);
-							        			Log.v(LOG_TAG, "starting usb reading task");
-												connectedGps = new ConnectedGps(device, deviceSpeed);
-												connectionAndReadingPool.execute(connectedGps);
-									        	Log.v(LOG_TAG, "usb reading thread started");
-								            } else if (device != null) {
-							        			Log.d(LOG_TAG, "We don't have permession, so resquesting...");
-								            	usbManager.requestPermission(device, permissionIntent);								            	
-								            } else {
-												Log.e(LOG_TAG, "Error while establishing connection: no device - " + gpsDevice);
-									        	disable(R.string.msg_gps_unavaible);
-								            }
-
-//											if ((gpsDev != null) && ((connectedGps == null) || (connectedGps.gpsDev != gpsDev))){
-//												Log.d(LOG_TAG, "trying to close old socket");
-//												gpsSocket.close();
-//											}
-//										} catch (IOException e) {
-//											Log.e(LOG_TAG, "Error during disconnection", e);
-//										}
-////										try {
-////											gpsSocket = gpsDevice.createRfcommSocketToServiceRecord(UUID.fromString("00001101-0000-1000-8000-00805F9B34FB"));
-//											gpsDev = new File(gpsDeviceAddress);
-//											// verify if we have enough rights..
-//											Log.v(LOG_TAG, "Will verify if device exists and is a file: "+gpsDev.getAbsolutePath());
-//											if (gpsDev.exists()){		
-//												Log.v(LOG_TAG, "Device exists and is a file: "+gpsDev.getAbsolutePath());
-//												if (! gpsDev.canRead()){
-//													Log.v(LOG_TAG, "Device is not readable, will try chmod 666 "+gpsDev.getAbsolutePath());
-//													try {
-//														// Try to get root privileges  
-//														Process p = Runtime.getRuntime().exec("su");
-//														// change device rights
-//														PrintStream os = new PrintStream(p.getOutputStream(),true);
-//														os.println("chmod 666 "+ gpsDev.getAbsolutePath());
-//														// exit
-//														os.println("exit");
-//														try {
-//															p.waitFor();  
-////															if (p.exitValue() != 255) {  
-////															}  
-////															else {  
-////															}  
-//														} catch (InterruptedException e) {  
-//															// TODO update message
-//															Log.e(LOG_TAG, "Error while establishing connection: ", e);
-//														} finally {
-//															p.destroy();
-//														}
-//													} catch (IOException e) {
-//														// TODO update message
-//														Log.e(LOG_TAG, "Error while establishing connection: ", e);
-//														gpsDev = null;														
-//													} catch (SecurityException e) {
-//														// TODO update message
-//														Log.e(LOG_TAG, "Error while establishing connection: ", e);
-//														gpsDev = null;
-//													}   
-//												} else {
-//													Log.v(LOG_TAG, "Device is readable: "+gpsDev.getAbsolutePath());
-//												}
-//												if (setDeviceSpeed){
-//													Log.v(LOG_TAG, "will set devive spped: " + deviceSpeed);
-//													try {
-//														// Try to get root privileges  
-//														Process p = Runtime.getRuntime().exec("su");
-//														// change device speed
-//														PrintStream os = new PrintStream(p.getOutputStream(),true);
-////														os.println("stty -F "+ gpsDev.getAbsolutePath() + " ispeed "+deviceSpeed);
-//														os.println("busybox stty -F "+ gpsDev.getAbsolutePath() + " ispeed "+deviceSpeed);
-//														// exit
-//														os.println("exit");
-//														try {
-//															p.waitFor();  
-////															if (p.exitValue() != 255) {  
-////															}  
-////															else {  
-////															}  
-//														} catch (InterruptedException e) {  
-//															// TODO update message
-//															Log.e(LOG_TAG, "Error while changing device speed: ", e);
-//														} finally {
-//															p.destroy();
-//														}
-//													} catch (IOException e) {
-//														// TODO update message
-//														Log.e(LOG_TAG, "Error while while changing device speed: ", e);
-//														// gpsDev = null;														
-//													} catch (SecurityException e) {
-//														// TODO update message
-//														Log.e(LOG_TAG, "Error while changing device speed: ", e);
-//														// gpsDev = null;
-//													}   
-//												} else {
-//													Log.v(LOG_TAG, "Device speed: "+deviceSpeed);
-//												}
-//											} else {
-//												Log.e(LOG_TAG, "Device doesn't exist: "+gpsDev.getAbsolutePath());
-//												gpsDev = null;
-//											}
-////										} catch (IOException e) {
-////											Log.e(LOG_TAG, "Error during connection", e);
-////						    				gpsDev = null;
-////										}
-//										if (gpsDev == null){
-//											Log.e(LOG_TAG, "Error while establishing connection: no device");
-//								        	disable(R.string.msg_gps_unavaible);
-//										} else {
-//											// start GPS device
-////											try {
-////												File gpsControl = new File("/sys/devices/platform/gps_control/enable");
-////												if (gpsControl.isFile()){												
-////													if (gpsControl.canWrite()){
-////														OutputStream os = new FileOutputStream(gpsControl);
-////														os.write('1');
-////														os.flush();
-////														os.close();
-////													}
-////												}
-////											} catch (FileNotFoundException e) {
-////												// TODO update message
-////												Log.e(LOG_TAG, "Error while starting GPS: ", e);
-////											} catch (IOException e) {
-////												// TODO update message
-////												Log.e(LOG_TAG, "Error while starting GPS: ", e);
-////											} catch (SecurityException e) {
-////												// TODO update message
-////												Log.e(LOG_TAG, "Error while starting GPS: ", e);
-////											}
-//											// Cancel discovery because it will slow down the connection
-////											bluetoothAdapter.cancelDiscovery();
-//											// we increment the number of connection tries
-//											// Connect the device through the socket. This will block
-//											// until it succeeds or throws an exception
-//											Log.v(LOG_TAG, "connecting to socket");
-////											gpsDev.connect();
-//						        			Log.d(LOG_TAG, "connected to socket");
-//											connected = true;
-//											// reset eventual disabling cause
-////											setDisableReason(0);
-//											// connection obtained so reset the number of connection try
-//											nbRetriesRemaining = 1+maxConnectionRetries ;
-//											notificationManager.cancel(R.string.connection_problem_notification_title);
-//						        			Log.v(LOG_TAG, "starting socket reading task");
-//											connectedGps = new ConnectedGps(gpsDev);
-//											connectionAndReadingPool.execute(connectedGps);
-//								        	Log.v(LOG_TAG, "socket reading thread started");
-//										}
-////									} else if (! bluetoothAdapter.isEnabled()) {
-//										setDisableReason(R.string.msg_bluetooth_disabled);
-									}
-//								} catch (IOException connectException) {
-//									// Unable to connect
-//									Log.e(LOG_TAG, "error while connecting to socket", connectException);									
-//									// disable(R.string.msg_bluetooth_gps_unavaible);
-								} finally {
-									nbRetriesRemaining--;
-									if (! connected) {
-										disableIfNeeded();
-									}
-								}
-							}
-						};
+					    Runnable connectThread = new Runnable() {
+					        @Override
+					        public void run() {
+					            try {
+					                connected = false;
+					                Log.v(LOG_TAG, "current device: "+gpsDevice);
+					                if ((nbRetriesRemaining > 0 )){
+					                    if (connectedGps != null){
+					                        connectedGps.close();
+					                    }
+					                    PendingIntent permissionIntent = PendingIntent.getBroadcast(callingService, 0, new Intent(ACTION_USB_PERMISSION), 0);
+					                    gpsDev = usbManager.getDeviceList().get(gpsDevice);
+					                    UsbDevice device = gpsDev;
+					                    if (device != null && usbManager.hasPermission(device)){
+					                        Log.d(LOG_TAG, "We have permession, good!");
+					                        connected = true;
+					                        if (setDeviceSpeed){
+					                            Log.v(LOG_TAG, "will set devive speed: " + deviceSpeed);
+					                        } else {
+					                            Log.v(LOG_TAG, "will use default device speed: " + defaultDeviceSpeed);
+					                            deviceSpeed = defaultDeviceSpeed;
+					                        }
+					                        Log.v(LOG_TAG, "starting usb reading task");
+					                        connectedGps = new ConnectedGps(device, deviceSpeed);
+					                        connectionAndReadingPool.execute(connectedGps);
+					                        Log.v(LOG_TAG, "usb reading thread started");
+					                    } else if (device != null) {
+					                        Log.d(LOG_TAG, "We don't have permession, so resquesting...");
+					                        usbManager.requestPermission(device, permissionIntent);
+					                    } else {
+					                        Log.e(LOG_TAG, "Error while establishing connection: no device - " + gpsDevice);
+					                        disable(R.string.msg_gps_unavaible);
+					                    }
+					                }
+					            } finally {
+					                nbRetriesRemaining--;
+					                if (! connected) {
+					                    disableIfNeeded();
+					                }
+					            }
+					        }
+					        };
 						this.enabled = true;
 				        callingService.registerReceiver(mUsbReceiver, filter);
 			        	Log.d(LOG_TAG, "Bluetooth GPS manager enabled");
@@ -962,11 +766,11 @@ public class BlueetoothGpsManager {
 		}
 		return this.enabled;
 	}
-	
+
 	/**
 	 * Disables the bluetooth GPS Provider if the maximal number of connection retries is exceeded.
-	 * This is used when there are possibly non fatal connection problems. 
-	 * In these cases the provider will try to reconnect with the bluetooth device 
+	 * This is used when there are possibly non fatal connection problems.
+	 * In these cases the provider will try to reconnect with the bluetooth device
 	 * and only after a given retries number will give up and shutdown the service.
 	 */
 	private synchronized void disableIfNeeded(){
@@ -976,35 +780,32 @@ public class BlueetoothGpsManager {
 				Log.e(LOG_TAG, "Unable to establish connection");
 				connectionProblemNotification.when = System.currentTimeMillis();
 				String pbMessage = appContext.getResources().getQuantityString(R.plurals.connection_problem_notification, nbRetriesRemaining, nbRetriesRemaining);
-				connectionProblemNotification.setLatestEventInfo(appContext, 
-						appContext.getString(R.string.connection_problem_notification_title), 
-						pbMessage, 
+				connectionProblemNotification.setLatestEventInfo(appContext,
+						appContext.getString(R.string.connection_problem_notification_title),
+						pbMessage,
 						connectionProblemNotification.contentIntent);
 				connectionProblemNotification.number = 1 + maxConnectionRetries - nbRetriesRemaining;
 				notificationManager.notify(R.string.connection_problem_notification_title, connectionProblemNotification);
 			} else {
-//				notificationManager.cancel(R.string.connection_problem_notification_title);
-//				serviceStoppedNotification.when = System.currentTimeMillis();
-//				notificationManager.notify(R.string.service_closed_because_connection_problem_notification_title, serviceStoppedNotification);
 				disable(R.string.msg_two_many_connection_problems);
 			}
 		}
 	}
-	
+
 	/**
 	 * Disables the bluetooth GPS provider.
-	 * 
-	 * It will: 
+	 *
+	 * It will:
 	 * <ul>
 	 * 	<li>close the connection with the bluetooth device</li>
 	 * 	<li>disable the Mock Location Provider used for the bluetooth GPS</li>
 	 * 	<li>stop the BlueGPS4Droid service</li>
 	 * </ul>
-	 * The reasonId parameter indicates the reason to close the bluetooth provider. 
+	 * The reasonId parameter indicates the reason to close the bluetooth provider.
 	 * If its value is zero, it's a normal shutdown (normally, initiated by the user).
-	 * If it's non-zero this value should correspond a valid localized string id (res/values..../...) 
+	 * If it's non-zero this value should correspond a valid localized string id (res/values..../...)
 	 * which will be used to display a notification.
-	 * 
+	 *
 	 * @param reasonId	the reason to close the bluetooth provider.
 	 */
 	public synchronized void disable(int reasonId) {
@@ -1012,11 +813,11 @@ public class BlueetoothGpsManager {
 		setDisableReason(reasonId);
     	disable();
 	}
-		
+
 	/**
 	 * Disables the bluetooth GPS provider.
-	 * 
-	 * It will: 
+	 *
+	 * It will:
 	 * <ul>
 	 * 	<li>close the connection with the bluetooth device</li>
 	 * 	<li>disable the Mock Location Provider used for the bluetooth GPS</li>
@@ -1028,8 +829,8 @@ public class BlueetoothGpsManager {
 		notificationManager.cancel(R.string.connection_problem_notification_title);
 		if (getDisableReason() != 0){
 			serviceStoppedNotification.when = System.currentTimeMillis();
-			serviceStoppedNotification.setLatestEventInfo(appContext, 
-					appContext.getString(R.string.service_closed_because_connection_problem_notification_title), 
+			serviceStoppedNotification.setLatestEventInfo(appContext,
+					appContext.getString(R.string.service_closed_because_connection_problem_notification_title),
 					appContext.getString(R.string.service_closed_because_connection_problem_notification, appContext.getString(getDisableReason())),
 					serviceStoppedNotification.contentIntent);
 			notificationManager.notify(R.string.service_closed_because_connection_problem_notification_title, serviceStoppedNotification);
@@ -1040,27 +841,7 @@ public class BlueetoothGpsManager {
 			enabled = false;
 			connectionAndReadingPool.shutdown();
 			// stop GPS device
-//			try {
-//				File gpsControl = new File("/sys/devices/platform/gps_control/enable");
-//				if (gpsControl.isFile()){												
-//					if (gpsControl.canWrite()){
-//						OutputStream os = new FileOutputStream(gpsControl);
-//						os.write('0');
-//						os.flush();
-//						os.close();
-//					}
-//				}
-//			} catch (FileNotFoundException e) {
-//				// TODO update message
-//				Log.e(LOG_TAG, "Error while stoping GPS: ", e);
-//			} catch (IOException e) {
-//				// TODO update message
-//				Log.e(LOG_TAG, "Error while stoping GPS: ", e);
-//			} catch (SecurityException e) {
-//				// TODO update message
-//				Log.e(LOG_TAG, "Error while stoping GPS: ", e);
-//			}
-			Runnable closeAndShutdown = new Runnable() {				
+			Runnable closeAndShutdown = new Runnable() {
 				@Override
 				public void run(){
 					try {
@@ -1073,14 +854,6 @@ public class BlueetoothGpsManager {
 						if (connectedGps != null){
 							connectedGps.close();
 						}
-//						if ((gpsDev != null) && ((connectedGps == null) || (connectedGps.gpsDev != gpsDev))){
-//							try {
-//								Log.d(LOG_TAG, "closing Bluetooth GPS socket");
-//								gpsDev.close();
-//							} catch (IOException closeException) {
-//								Log.e(LOG_TAG, "error while closing socket", closeException);
-//							}
-//						}
 					}
 				}
 			};
@@ -1088,7 +861,7 @@ public class BlueetoothGpsManager {
 			nmeaListeners.clear();
 			disableMockLocationProvider();
 			notificationPool.shutdown();
-//			connectionAndReadingPool.shutdown();
+
 			callingService.stopSelf();
         	Log.d(LOG_TAG, "Bluetooth GPS manager disabled");
 		}
@@ -1096,8 +869,8 @@ public class BlueetoothGpsManager {
 
 	/**
 	 * Enables the Mock GPS Location Provider used for the bluetooth GPS.
-	 * In fact, it delegates to the NMEA parser. 
-	 * 
+	 * In fact, it delegates to the NMEA parser.
+	 *
 	 * @see NmeaParser#enableMockLocationProvider(java.lang.String)
 
 	 * @param gpsName	the name of the Location Provider to use for the bluetooth GPS
@@ -1112,8 +885,8 @@ public class BlueetoothGpsManager {
 
 	/**
 	 * Enables the Mock GPS Location Provider used for the bluetooth GPS.
-	 * In fact, it delegates to the NMEA parser. 
-	 * 
+	 * In fact, it delegates to the NMEA parser.
+	 *
 	 * @see NmeaParser#enableMockLocationProvider(java.lang.String)
 
 	 * @param gpsName	the name of the Location Provider to use for the bluetooth GPS
@@ -1121,15 +894,15 @@ public class BlueetoothGpsManager {
 	public void enableMockLocationProvider(String gpsName){
 		if (parser != null){
 	       	Log.d(LOG_TAG, "enabling mock locations provider: "+gpsName);
-	    	boolean force = sharedPreferences.getBoolean(BluetoothGpsProviderService.PREF_FORCE_ENABLE_PROVIDER, true);
+	    	boolean force = sharedPreferences.getBoolean(UsbGpsProviderService.PREF_FORCE_ENABLE_PROVIDER, true);
 			parser.enableMockLocationProvider(gpsName, force);
 		}
 	}
 
 	/**
 	 * Disables the current Mock GPS Location Provider used for the bluetooth GPS.
-	 * In fact, it delegates to the NMEA parser. 
-	 * 
+	 * In fact, it delegates to the NMEA parser.
+	 *
 	 * @see NmeaParser#disableMockLocationProvider()
 	 */
 	public void disableMockLocationProvider(){
@@ -1141,10 +914,10 @@ public class BlueetoothGpsManager {
 
 	/**
 	 * Getter use to know if the Mock GPS Listener used for the bluetooth GPS is enabled or not.
-	 * In fact, it delegates to the NMEA parser. 
-	 * 
+	 * In fact, it delegates to the NMEA parser.
+	 *
 	 * @see NmeaParser#isMockGpsEnabled()
-	 * 
+	 *
 	 * @return 	true if the Mock GPS Listener used for the bluetooth GPS is enabled.
 	 */
 	public boolean isMockGpsEnabled() {
@@ -1156,10 +929,10 @@ public class BlueetoothGpsManager {
 	}
 	/**
 	 * Getter for the name of the current Mock Location Provider in use.
-	 * In fact, it delegates to the NMEA parser. 
-	 * 
+	 * In fact, it delegates to the NMEA parser.
+	 *
 	 * @see NmeaParser#getMockLocationProvider()
-	 * 
+	 *
 	 * @return the Mock Location Provider name used for the bluetooth GPS
 	 */
 	public String getMockLocationProvider() {
@@ -1172,8 +945,8 @@ public class BlueetoothGpsManager {
 
 	/**
 	 * Indicates that the bluetooth GPS Provider is out of service.
-	 * In fact, it delegates to the NMEA parser. 
-	 * 
+	 * In fact, it delegates to the NMEA parser.
+	 *
 	 * @see NmeaParser#setMockLocationProviderOutOfService()
 	 */
 	private void setMockLocationProviderOutOfService(){
@@ -1184,8 +957,8 @@ public class BlueetoothGpsManager {
 
 	/**
 	 * Adds an NMEA listener.
-	 * In fact, it delegates to the NMEA parser. 
-	 * 
+	 * In fact, it delegates to the NMEA parser.
+	 *
 	 * @see NmeaParser#addNmeaListener(NmeaListener)
 	 * @param listener	a {@link NmeaListener} object to register
 	 * @return	true if the listener was successfully added
@@ -1200,10 +973,10 @@ public class BlueetoothGpsManager {
 
 	/**
 	 * Removes an NMEA listener.
-	 * In fact, it delegates to the NMEA parser. 
-	 * 
+	 * In fact, it delegates to the NMEA parser.
+	 *
 	 * @see NmeaParser#removeNmeaListener(NmeaListener)
-	 * @param listener	a {@link NmeaListener} object to remove 
+	 * @param listener	a {@link NmeaListener} object to remove
 	 */
 	public void removeNmeaListener(NmeaListener listener){
        	Log.d(LOG_TAG, "removing NMEA listener");
@@ -1212,7 +985,7 @@ public class BlueetoothGpsManager {
 
 	/**
 	 * Notifies the reception of a NMEA sentence from the bluetooth GPS to registered NMEA listeners.
-	 * 
+	 *
 	 * @param nmeaSentence	the complete NMEA sentence received from the bluetooth GPS (i.e. $....*XY where XY is the checksum)
 	 * @return true if the input string is a valid NMEA sentence, false otherwise.
 	 */
@@ -1240,18 +1013,18 @@ public class BlueetoothGpsManager {
 							@Override
 							public void run() {
 								listener.onNmeaReceived(timestamp, recognizedSentence);
-							}					 
+							}
 						});
 					}
 				}
 			}
 		}
 		return res;
-	}	
+	}
 
 	/**
 	 * Sends a NMEA sentence to the bluetooth GPS.
-	 * 
+	 *
 	 * @param command	the complete NMEA sentence (i.e. $....*XY where XY is the checksum).
 	 */
 	public void sendPackagedNmeaCommand(final String command){
@@ -1262,8 +1035,8 @@ public class BlueetoothGpsManager {
 
 	/**
 	 * Sends a SIRF III binary command to the bluetooth GPS.
-	 * 
-	 * @param commandHexa	an hexadecimal string representing a complete binary command 
+	 *
+	 * @param commandHexa	an hexadecimal string representing a complete binary command
 	 * (i.e. with the <em>Start Sequence</em>, <em>Payload Length</em>, <em>Payload</em>, <em>Message Checksum</em> and <em>End Sequence</em>).
 	 */
 	public void sendPackagedSirfCommand(final String commandHexa){
@@ -1275,7 +1048,7 @@ public class BlueetoothGpsManager {
 
 	/**
 	 * Sends a NMEA sentence to the bluetooth GPS.
-	 * 
+	 *
 	 * @param sentence	the NMEA sentence without the first "$", the last "*" and the checksum.
 	 */
 	public void sendNmeaCommand(String sentence){
@@ -1285,7 +1058,7 @@ public class BlueetoothGpsManager {
 
 	/**
 	 * Sends a SIRF III binary command to the bluetooth GPS.
-	 * 
+	 *
 	 * @param payload	an hexadecimal string representing the payload of the binary command
 	 * (i.e. without <em>Start Sequence</em>, <em>Payload Length</em>, <em>Message Checksum</em> and <em>End Sequence</em>).
 	 */
@@ -1389,7 +1162,7 @@ public class BlueetoothGpsManager {
 	public void enableSirfConfig(final Bundle extra){
 		Log.e(LOG_TAG, "spooling SiRF config: "+ extra);
 		if (isEnabled()){
-			notificationPool.execute( new Runnable() {			
+			notificationPool.execute( new Runnable() {
 				@Override
 				public void run() {
 					while ((enabled) && ((!connected) || (connectedGps == null) || (!connectedGps.isReady()))){
@@ -1398,34 +1171,34 @@ public class BlueetoothGpsManager {
 					}
 					if (isEnabled() && (connected) && (connectedGps != null) && (connectedGps.isReady())){
 						Log.e(LOG_TAG, "init SiRF config: "+extra);
-						if (extra.containsKey(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GGA)){
-							enableNmeaGGA(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GGA, true));
+						if (extra.containsKey(UsbGpsProviderService.PREF_SIRF_ENABLE_GGA)){
+							enableNmeaGGA(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_GGA, true));
 						}
-						if (extra.containsKey(BluetoothGpsProviderService.PREF_SIRF_ENABLE_RMC)){
-							enableNmeaRMC(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_RMC, true));
+						if (extra.containsKey(UsbGpsProviderService.PREF_SIRF_ENABLE_RMC)){
+							enableNmeaRMC(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_RMC, true));
 						}
-						if (extra.containsKey(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GLL)){
-							enableNmeaGLL(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GLL, false));
+						if (extra.containsKey(UsbGpsProviderService.PREF_SIRF_ENABLE_GLL)){
+							enableNmeaGLL(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_GLL, false));
 						}
-						if (extra.containsKey(BluetoothGpsProviderService.PREF_SIRF_ENABLE_VTG)){
-							enableNmeaVTG(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_VTG, false));
+						if (extra.containsKey(UsbGpsProviderService.PREF_SIRF_ENABLE_VTG)){
+							enableNmeaVTG(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_VTG, false));
 						}
-						if (extra.containsKey(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GSA)){
-							enableNmeaGSA(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GSA, false));
+						if (extra.containsKey(UsbGpsProviderService.PREF_SIRF_ENABLE_GSA)){
+							enableNmeaGSA(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_GSA, false));
 						}
-						if (extra.containsKey(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GSV)){
-							enableNmeaGSV(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GSV, false));
+						if (extra.containsKey(UsbGpsProviderService.PREF_SIRF_ENABLE_GSV)){
+							enableNmeaGSV(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_GSV, false));
 						}
-						if (extra.containsKey(BluetoothGpsProviderService.PREF_SIRF_ENABLE_ZDA)){
-							enableNmeaZDA(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_ZDA, false));
+						if (extra.containsKey(UsbGpsProviderService.PREF_SIRF_ENABLE_ZDA)){
+							enableNmeaZDA(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_ZDA, false));
 						}
-						if (extra.containsKey(BluetoothGpsProviderService.PREF_SIRF_ENABLE_STATIC_NAVIGATION)){
-							enableStaticNavigation(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_STATIC_NAVIGATION, false));
-						} else if (extra.containsKey(BluetoothGpsProviderService.PREF_SIRF_ENABLE_NMEA)){
-							enableNMEA(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_NMEA, true));
+						if (extra.containsKey(UsbGpsProviderService.PREF_SIRF_ENABLE_STATIC_NAVIGATION)){
+							enableStaticNavigation(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_STATIC_NAVIGATION, false));
+						} else if (extra.containsKey(UsbGpsProviderService.PREF_SIRF_ENABLE_NMEA)){
+							enableNMEA(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_NMEA, true));
 						}
-						if (extra.containsKey(BluetoothGpsProviderService.PREF_SIRF_ENABLE_SBAS)){
-							enableSBAS(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_SBAS, true));
+						if (extra.containsKey(UsbGpsProviderService.PREF_SIRF_ENABLE_SBAS)){
+							enableSBAS(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_SBAS, true));
 						}
 						Log.e(LOG_TAG, "initialized SiRF config: "+extra);
 					}
@@ -1437,7 +1210,7 @@ public class BlueetoothGpsManager {
 	public void enableSirfConfig(final SharedPreferences extra){
 		Log.e(LOG_TAG, "spooling SiRF config: "+ extra);
 		if (isEnabled()){
-			notificationPool.execute( new Runnable() {			
+			notificationPool.execute( new Runnable() {
 				@Override
 				public void run() {
 					while ((enabled) && ((!connected) || (connectedGps == null) || (!connectedGps.isReady()))){
@@ -1446,36 +1219,36 @@ public class BlueetoothGpsManager {
 					}
 					if (isEnabled() && (connected) && (connectedGps != null) && (connectedGps.isReady())){
 						Log.e(LOG_TAG, "init SiRF config: "+extra);
-						if (extra.contains(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GLL)){
-							enableNmeaGLL(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GLL, false));
+						if (extra.contains(UsbGpsProviderService.PREF_SIRF_ENABLE_GLL)){
+							enableNmeaGLL(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_GLL, false));
 						}
-						if (extra.contains(BluetoothGpsProviderService.PREF_SIRF_ENABLE_VTG)){
-							enableNmeaVTG(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_VTG, false));
+						if (extra.contains(UsbGpsProviderService.PREF_SIRF_ENABLE_VTG)){
+							enableNmeaVTG(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_VTG, false));
 						}
-						if (extra.contains(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GSA)){
-							enableNmeaGSA(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GSA, false));
+						if (extra.contains(UsbGpsProviderService.PREF_SIRF_ENABLE_GSA)){
+							enableNmeaGSA(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_GSA, false));
 						}
-						if (extra.contains(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GSV)){
-							enableNmeaGSV(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GSV, false));
+						if (extra.contains(UsbGpsProviderService.PREF_SIRF_ENABLE_GSV)){
+							enableNmeaGSV(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_GSV, false));
 						}
-						if (extra.contains(BluetoothGpsProviderService.PREF_SIRF_ENABLE_ZDA)){
-							enableNmeaZDA(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_ZDA, false));
+						if (extra.contains(UsbGpsProviderService.PREF_SIRF_ENABLE_ZDA)){
+							enableNmeaZDA(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_ZDA, false));
 						}
-						if (extra.contains(BluetoothGpsProviderService.PREF_SIRF_ENABLE_STATIC_NAVIGATION)){
-							enableStaticNavigation(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_STATIC_NAVIGATION, false));
-						} else if (extra.contains(BluetoothGpsProviderService.PREF_SIRF_ENABLE_NMEA)){
-							enableNMEA(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_NMEA, true));
+						if (extra.contains(UsbGpsProviderService.PREF_SIRF_ENABLE_STATIC_NAVIGATION)){
+							enableStaticNavigation(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_STATIC_NAVIGATION, false));
+						} else if (extra.contains(UsbGpsProviderService.PREF_SIRF_ENABLE_NMEA)){
+							enableNMEA(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_NMEA, true));
 						}
-						if (extra.contains(BluetoothGpsProviderService.PREF_SIRF_ENABLE_SBAS)){
-							enableSBAS(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_SBAS, true));
+						if (extra.contains(UsbGpsProviderService.PREF_SIRF_ENABLE_SBAS)){
+							enableSBAS(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_SBAS, true));
 						}
 						sendNmeaCommand(callingService.getString(R.string.sirf_nmea_gga_on));
 						sendNmeaCommand(callingService.getString(R.string.sirf_nmea_rmc_on));
-						if (extra.contains(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GGA)){
-							enableNmeaGGA(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_GGA, true));
+						if (extra.contains(UsbGpsProviderService.PREF_SIRF_ENABLE_GGA)){
+							enableNmeaGGA(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_GGA, true));
 						}
-						if (extra.contains(BluetoothGpsProviderService.PREF_SIRF_ENABLE_RMC)){
-							enableNmeaRMC(extra.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_RMC, true));
+						if (extra.contains(UsbGpsProviderService.PREF_SIRF_ENABLE_RMC)){
+							enableNmeaRMC(extra.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_RMC, true));
 						}
 					}
 				}
@@ -1485,7 +1258,7 @@ public class BlueetoothGpsManager {
 
 	private void enableStaticNavigation(boolean enable){
 		SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(callingService);
-		boolean isInNmeaMode = sharedPreferences.getBoolean(BluetoothGpsProviderService.PREF_SIRF_ENABLE_NMEA, true);
+		boolean isInNmeaMode = sharedPreferences.getBoolean(UsbGpsProviderService.PREF_SIRF_ENABLE_NMEA, true);
 		if (isInNmeaMode){
 			enableNMEA(false);
 		}

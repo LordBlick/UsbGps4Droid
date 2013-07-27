@@ -79,8 +79,7 @@
 			android:key="@string/pref_connection_retries_key"
 			android:title="@string/pref_connection_retries_title"
 			android:defaultValue="@string/defaultConnectionRetries"
-			android:inputType="numberDecimal"
-			android:summary="@string/pref_connection_retries_summary" />
+			android:inputType="numberDecimal" />
 	</PreferenceScreen>
 	<CheckBoxPreference 
 		android:enabled="true"
