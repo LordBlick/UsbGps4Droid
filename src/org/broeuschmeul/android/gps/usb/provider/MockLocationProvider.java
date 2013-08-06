@@ -1,0 +1,202 @@
+package org.broeuschmeul.android.gps.usb.provider;
+
+import android.content.Context;
+import android.location.Criteria;
+import android.location.Location;
+import android.location.LocationManager;
+import android.location.LocationProvider;
+import android.os.SystemClock;
+import android.text.TextUtils;
+
+public class MockLocationProvider {
+
+    /**
+     * External device status
+     *
+     */
+    public static enum Status {
+
+        /**
+         * The device is not connected.
+         * @see LocationProvider#OUT_OF_SERVICE
+         */
+        OUT_OF_SERVICE(LocationProvider.OUT_OF_SERVICE),
+
+        /**
+         * The device is connected but the location is not known
+         * @see LocationProvider#TEMPORARILY_UNAVAILABLE
+         */
+        TEMPORARILY_UNAVAILABLE(LocationProvider.TEMPORARILY_UNAVAILABLE),
+
+        /**
+         * The device is connected and location is known
+         */
+        AVAILABLE(LocationProvider.AVAILABLE);
+
+        private final int  mLocationProviderStatus;
+
+        private Status(int locationProviderStatus) {
+            mLocationProviderStatus = locationProviderStatus;
+        }
+
+        public int getLocationProviderStatus() {
+            return mLocationProviderStatus;
+        }
+    }
+
+    private static String mName;
+
+    private boolean mAttached;
+
+    private LocationManager mLocationManager;
+
+    private Status mDeviceStatus;
+
+
+    public MockLocationProvider(String name) {
+        if (TextUtils.isEmpty(name)) throw new IllegalArgumentException();
+        mName = name;
+        mAttached = false;
+        mDeviceStatus = Status.OUT_OF_SERVICE;
+    }
+
+    public static boolean isProviderNameValid(String name) {
+
+        if (TextUtils.isEmpty(name)) return false;
+
+        if (LocationManager.GPS_PROVIDER.equals(name)
+                || LocationManager.NETWORK_PROVIDER.equals(name)
+                || LocationManager.PASSIVE_PROVIDER.equals(name)
+                ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Creates a mock location provider and adds it to the set of active providers.
+     * @param context
+     * @throws SecurityException  if the ACCESS_MOCK_LOCATION permission is not present or the
+     *  Settings.Secure.ALLOW_MOCK_LOCATION system setting is not enabled
+     * @throws IllegalArgumentException if a provider with the given name already exists
+     */
+    public void attach(Context context) throws SecurityException, IllegalArgumentException {
+        if (context == null) throw new NullPointerException();
+
+        if (mAttached) return;
+
+        mLocationManager = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
+
+        mLocationManager.addTestProvider(mName,
+                /* requiresNetwork */ false,
+                /* requiresSatellite */ true,
+                /* requiresCell */    false,
+                /* hasMonetaryCost */ false,
+                /* supportsAltitude */ true,
+                /* supportsSpeed */    true,
+                /* supportsBearing */  true,
+                /* powerRequirement */ Criteria.POWER_MEDIUM,
+                /* accuracy */ Criteria.ACCURACY_FINE);
+
+        mAttached = true;
+
+        if (mDeviceStatus != Status.OUT_OF_SERVICE) {
+            mLocationManager.setTestProviderStatus(mName,
+                    mDeviceStatus.getLocationProviderStatus(),
+                    null,
+                    SystemClock.elapsedRealtime());
+        }
+
+    }
+
+    /**
+     * Removes the mock location provider from LocationManager
+     */
+    public void detach() {
+        if (!mAttached) return;
+
+        mLocationManager.removeTestProvider(mName);
+
+        mLocationManager = null;
+    }
+
+    /**
+     * Returns true if the provider is attached
+     */
+    public boolean isAttached() {
+        return mAttached;
+    }
+
+    /**
+     * Set the name of this provider.
+     * @throws IllegalArgumentException if name of provider is not valid
+     * @throws IllegalStateException if the provider is attached
+     */
+    public void setName(String name) throws IllegalArgumentException, IllegalStateException {
+
+        if (!isProviderNameValid(name)) throw new IllegalArgumentException();
+
+        if (mAttached) throw new IllegalStateException();
+
+        mName = name;
+    }
+
+    /**
+     * Returns the name of this provider.
+     */
+    public String getName() {
+        return mName;
+    }
+
+    /**
+     * Replace internal GPS
+     * @param replace
+     * @throws SecurityException if the ACCESS_MOCK_LOCATION permission is not present or
+     *         the Settings.Secure.ALLOW_MOCK_LOCATION} system setting is not enabled
+     * @throws IllegalStateException if provider is not attached
+     */
+    public void replaceInternalGps(boolean replace) throws SecurityException, IllegalStateException {
+        if (!mAttached) throw new IllegalStateException();
+
+        mLocationManager.setTestProviderEnabled(mName, replace);
+    }
+
+    /**
+     * Returns external device status
+     */
+    public Status getDeviceStatus() {
+        return mDeviceStatus;
+    }
+
+    /**
+     * Set external device status
+     * @param status {link Status#OUT_OF_SERVICE}, {@link Status#TEMPORARILY_UNAVAILABLE}, {@link Status#AVAILABLE}
+     * @see LocationManager#setTestProviderStatus(String, int, android.os.Bundle, long)
+     */
+    public void setDeviceStatus(Status status) {
+        if (mDeviceStatus == status) return;
+        mDeviceStatus = status;
+
+        if (mAttached) {
+            mLocationManager.setTestProviderStatus(mName,
+                    mDeviceStatus.getLocationProviderStatus(),
+                    null,
+                    SystemClock.elapsedRealtime());
+        }
+    }
+
+    /**
+     *
+     * @see LocationManager#setTestProviderLocation(String, Location)
+     */
+    public void setLocation(Location location) throws IllegalArgumentException {
+        if (mAttached) {
+            if (mDeviceStatus == Status.TEMPORARILY_UNAVAILABLE) {
+                setDeviceStatus(Status.AVAILABLE);
+            }
+            mLocationManager.setTestProviderLocation(mName, location);
+        }
+    }
+
+}
