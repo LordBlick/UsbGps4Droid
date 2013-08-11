@@ -36,6 +36,8 @@ import android.preference.PreferenceManager;
 import android.util.Log;
 import android.widget.Toast;
 
+import org.broeuschmeul.android.gps.usb.UsbSerialController;
+
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
@@ -93,7 +95,8 @@ public class UsbGpsProviderService extends Service {
 	public static final String PREF_SIRF_ENABLE_NMEA = "enableNMEA";
 	public static final String PREF_SIRF_ENABLE_STATIC_NAVIGATION = "enableStaticNavigation";
 
-	private BlueetoothGpsManager mGpsManager = null;
+	private UsbGpsConverter mConverter;
+
 	private PrintWriter writer;
 	private File trackFile;
 	private boolean preludeWritten = false;
@@ -101,6 +104,7 @@ public class UsbGpsProviderService extends Service {
 	@Override
 	public void onCreate() {
 		super.onCreate();
+		mConverter = new UsbGpsConverter(this);
 	}
 
 	@Override
@@ -133,49 +137,42 @@ public class UsbGpsProviderService extends Service {
 
 
     public boolean isServiceStarted() {
-        return mGpsManager != null;
+        return mConverter.isActive();
     }
 
 
     private void processStartGpsProvider() {
+        final SharedPreferences prefs;
+        final String providerName;
+        final MockLocationProvider provider;
+        final boolean replaceInternalGps;
+        final String usbBaudrate;
 
         if (isServiceStarted()) return;
+
+        prefs = PreferenceManager.getDefaultSharedPreferences(this);
+        providerName = prefs.getString(PREF_MOCK_GPS_NAME,
+                MockLocationProvider.DEFAULT_NAME);
+        replaceInternalGps = prefs.getBoolean(PREF_REPLACE_STD_GPS, false);
+        usbBaudrate = prefs.getString(PREF_GPS_DEVICE_SPEED,
+                String.valueOf(UsbSerialController.DEFAULT_BAUDRATE));
+
+        provider = new MockLocationProvider(providerName);
+        provider.replaceInternalGps(replaceInternalGps);
+
+        mConverter.setLocationProvider(provider);
+        try {
+            mConverter.setBaudRate(Integer.valueOf(usbBaudrate));
+        } catch (NumberFormatException nfe) {
+            nfe.printStackTrace();
+        }
+
+        mConverter.start();
 
         Notification notification = createForegroundNotification();
         startForeground(R.string.foreground_gps_provider_started_notification, notification);
 
-
-//        if (mGpsManager == null){
-//            if (true /*|| BluetoothAdapter.checkBluetoothAddress(deviceAddress)*/){
-//                String mockProvider = LocationManager.GPS_PROVIDER;
-//                if (! sharedPreferences.getBoolean(PREF_REPLACE_STD_GPS, true)){
-//                    mockProvider = sharedPreferences.getString(PREF_MOCK_GPS_NAME, getString(R.string.defaultMockGpsName));
-//                }
-//                mGpsManager = new BlueetoothGpsManager(this, deviceAddress, maxConRetries);
-//                boolean enabled = mGpsManager.enable();
-//                if (sharedPreferences.getBoolean(PREF_START_GPS_PROVIDER, false) != enabled){
-//                    edit.putBoolean(PREF_START_GPS_PROVIDER,enabled);
-//                    edit.commit();
-//                }
-//                if (enabled) {
-//                    mGpsManager.enableMockLocationProvider(mockProvider);
-//                    Notification notification = new Notification(R.drawable.ic_stat_notify, this.getString(R.string.foreground_gps_provider_started_notification),  System.currentTimeMillis());
-//                    Intent myIntent = new Intent(this, UsbGpsActivity.class);
-//                    PendingIntent myPendingIntent = PendingIntent.getActivity(this, 0, myIntent, PendingIntent.FLAG_CANCEL_CURRENT);
-//                    notification.setLatestEventInfo(getApplicationContext(), this.getString(R.string.foreground_service_started_notification_title), this.getString(R.string.foreground_gps_provider_started_notification), myPendingIntent);
-//                    startForeground(R.string.foreground_gps_provider_started_notification, notification);
-//                    toast.setText(this.getString(R.string.msg_gps_provider_started));
-//                    toast.show();
-//                } else {
-//                    stopSelf();
-//                }
-//            } else {
-//                stopSelf();
-//            }
-//        } else {
-//            toast.setText(this.getString(R.string.msg_gps_provider_already_started));
-//            toast.show();
-//        }
+        Toast.makeText(this, this.getString(R.string.msg_gps_provider_started), Toast.LENGTH_SHORT).show();
     }
 
     private void processStopGpsProvider() {
@@ -184,6 +181,7 @@ public class UsbGpsProviderService extends Service {
     }
 
     private void processStartTrackRecording() {
+        /*
         if (trackFile == null){
             if (mGpsManager != null){
                 beginTrack();
@@ -197,27 +195,30 @@ public class UsbGpsProviderService extends Service {
             Toast.makeText(this, getText(R.string.msg_nmea_recording_already_started),
                     Toast.LENGTH_SHORT).show();
         }
+        */
     }
 
     private void processStopTrackRecording() {
+        /*
         if (mGpsManager != null){
             mGpsManager.removeNmeaListener(mNmeaListener);
             endTrack();
             Toast.makeText(this, getText(R.string.msg_nmea_recording_stopped),
                     Toast.LENGTH_SHORT).show();
         }
+        */
     }
 
     private void processConfigureSirfGps(Bundle extras) {
         if (!isServiceStarted()) return;
-        mGpsManager.enableSirfConfig(extras);
+        //mGpsManager.enableSirfConfig(extras);
     }
 
     private void stop() {
         stopForeground(true);
 
         if (isServiceStarted()) {
-            //mGpsManager.stop();
+            mConverter.stop();
 
             Toast.makeText(this, R.string.msg_gps_provider_stopped, Toast.LENGTH_SHORT)
             .show();

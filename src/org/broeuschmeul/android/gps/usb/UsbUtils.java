@@ -31,8 +31,6 @@ import org.broeuschmeul.android.gps.usb.provider.R;
 import org.xmlpull.v1.XmlPullParserException;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -130,39 +128,5 @@ public class UsbUtils {
 
        return null;
     }
-
-    static class DummyInputStream extends InputStream {
-
-        public static final DummyInputStream instance = new DummyInputStream();
-
-        private DummyInputStream() {}
-
-        @Override
-        public int read() throws IOException {
-            return -1;
-        }
-
-        @Override
-        public int read(byte[] buffer, int offset, int length) throws IOException {
-            return -1;
-        }
-    }
-
-    static class DummyOutputStream extends OutputStream  {
-
-        public static final DummyOutputStream instance = new DummyOutputStream();
-
-        private DummyOutputStream() {}
-
-        @Override
-        public void write(int arg0) throws IOException {
-        }
-
-        @Override
-        public void write(byte[] buffer, int offset, int count)
-                throws IOException {
-        }
-    }
-
 
 }

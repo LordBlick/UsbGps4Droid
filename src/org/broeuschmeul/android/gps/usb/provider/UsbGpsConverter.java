@@ -1,4 +1,4 @@
-package org.broeuschmeul.android.gps.usb;
+package org.broeuschmeul.android.gps.usb.provider;
 
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
@@ -7,20 +7,23 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
+import android.location.Location;
 import android.os.ConditionVariable;
 import android.util.Log;
 
+import org.broeuschmeul.android.gps.usb.UsbSerialController;
 import org.broeuschmeul.android.gps.usb.UsbSerialController.UsbControllerException;
-import org.broeuschmeul.android.gps.usb.provider.BuildConfig;
+import org.broeuschmeul.android.gps.usb.UsbUtils;
+import org.broeuschmeul.android.gps.usb.provider.MockLocationProvider.Status;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
-public class UsbGpsManager {
+public class UsbGpsConverter {
 
     private static final boolean DBG = BuildConfig.DEBUG & true;
-    static final String TAG = UsbGpsManager.class.getSimpleName();
+    static final String TAG = UsbGpsConverter.class.getSimpleName();
 
     // Constants that indicate the current connection state
     public static final int STATE_IDLE = 0;
@@ -29,23 +32,15 @@ public class UsbGpsManager {
     public static final int STATE_WAITING = 3;
     public static final int STATE_RECONNECTING = 4;
 
-    public static final String ACTION_USB_DEVICE_ATTACHED = "ru0xdc.rtkgps.UsbToRtklib.ACTION_USB_DEVICE_ATTACHED";
-
-    final UsbReceiver mUsbReceiver;
-
-    private Callbacks mCallbacks;
+    public static final String ACTION_USB_DEVICE_ATTACHED = "org.broeuschmeul.android.gps.usb.provider.ACTION_USB_DEVICE_ATTACHED";
 
     public static final int RECONNECT_TIMEOUT_MS = 2000;
 
-    private static final Callbacks sDummyCallbacks = new Callbacks() {
-        @Override
-        public void onConnected() {}
-        @Override
-        public void onStopped() {}
-        @Override
-        public void onConnectionLost() {}
-    };
 
+    private final Context mContext;
+    final UsbReceiver mUsbReceiver;
+    private Callbacks mCallbacks;
+    private MockLocationProvider mLocationProvider;
 
     public interface Callbacks {
 
@@ -57,17 +52,47 @@ public class UsbGpsManager {
 
     }
 
-    public UsbGpsManager(Context serviceContext) {
-        mUsbReceiver = new UsbReceiver(serviceContext);
+    private static final Callbacks sDummyCallbacks = new Callbacks() {
+        @Override
+        public void onConnected() {}
+        @Override
+        public void onStopped() {}
+        @Override
+        public void onConnectionLost() {}
+    };
+
+    public UsbGpsConverter(Context serviceContext) {
+        this(serviceContext, new MockLocationProvider());
+    }
+
+    public UsbGpsConverter(Context serviceContext, MockLocationProvider provider) {
+        mContext = serviceContext;
+        mLocationProvider = provider;
+        mUsbReceiver = new UsbReceiver();
         mCallbacks = sDummyCallbacks;
     }
 
     public void start() {
+        mLocationProvider.attach(mContext);
         mUsbReceiver.start();
     }
 
     public void stop() {
         mUsbReceiver.stop();
+        mLocationProvider.detach();
+    }
+
+    public boolean isActive() {
+        return mLocationProvider.isAttached();
+    }
+
+    public void setLocationProvider(MockLocationProvider provider) {
+        if (provider == null) throw new NullPointerException();
+        mLocationProvider = provider;
+    }
+
+    public final MockLocationProvider getLocationProvider() {
+        return mLocationProvider;
     }
 
     public void setBaudRate(int baudrate) {
@@ -89,18 +114,14 @@ public class UsbGpsManager {
 
         private int mBaudrate = UsbSerialController.DEFAULT_BAUDRATE;
 
-        private Context mContext;
-
         private UsbManager mUsbManager;
 
         final ConditionVariable mIsUsbDeviceReadyCondvar;
 
         private UsbServiceThread mServiceThread;
 
-        public UsbReceiver(Context pContext) {
-
-            this.mContext = pContext;
-            this.mUsbManager = (UsbManager) pContext.getSystemService(Context.USB_SERVICE);
+        public UsbReceiver() {
+            this.mUsbManager = (UsbManager) mContext.getSystemService(Context.USB_SERVICE);
             mIsUsbDeviceReadyCondvar = new ConditionVariable(false);
 
             if (mUsbManager == null) throw new IllegalStateException("USB not available");
@@ -237,8 +258,8 @@ public class UsbGpsManager {
             private final ConditionVariable serialControllerSet;
 
             public UsbServiceThread() {
-                mInputStream = UsbUtils.DummyInputStream.instance;
-                mOutputStream = UsbUtils.DummyOutputStream.instance;
+                mInputStream = DummyInputStream.instance;
+                mOutputStream = DummyOutputStream.instance;
                 mConnectionState = STATE_IDLE;
                 cancelRequested = false;
                 mUsbController = null;
@@ -263,21 +284,19 @@ public class UsbGpsManager {
                 mConnectionState = state;
                 if (DBG) Log.d(TAG, "setState() " + oldState + " -> " + state);
 
-                if (mConnectionState == STATE_CONNECTED)
+                if (mConnectionState == STATE_CONNECTED) {
                     mIsUsbDeviceReadyCondvar.open();
-                else {
+                    mLocationProvider.setDeviceStatus(Status.TEMPORARILY_UNAVAILABLE);
+                } else {
                     mIsUsbDeviceReadyCondvar.close();
-                    //mLocalSocketThread.disconnect();
+                    mLocationProvider.setDeviceStatus(Status.OUT_OF_SERVICE);
                 }
             }
 
             public synchronized void cancel() {
                 cancelRequested = true;
                 mCallbacks.onStopped();
-                if (mUsbController != null) {
-                    mUsbController.detach();
-                    mUsbController=null;
-                }
+                setController(null);
             }
 
             /**
@@ -307,6 +326,8 @@ public class UsbGpsManager {
                 synchronized(UsbReceiver.this) {
                     synchronized (this) {
                         throwIfCancelRequested();
+                        if (mUsbController == null) throw new UsbControllerException("");
+
                         if (DBG) Log.v(TAG, "attach(). baudrate: "+ mUsbController.getBaudRate());
                         mUsbController.attach();
                         mInputStream = mUsbController.getInputStream();
@@ -342,29 +363,48 @@ public class UsbGpsManager {
             private void transferDataLoop() throws CancelRequestedException {
                 int rcvd;
                 final byte buf[] = new byte[4096];
+                final GpsInputReader inputReader;
+                final GpsMessageParser mMessageParser;
+
+                mMessageParser = new GpsMessageParser() {
+
+                    @Override
+                    public void setNewLocation(Location l) {
+                        mLocationProvider.setLocation(l);
+                    }
+
+                };
+
+                inputReader = new GpsInputReader(mInputStream) {
+
+                    @Override
+                    protected void onRawDataReceived(byte[] buf, int offset, int length) {
+                    }
+
+                    @Override
+                    protected void onNmeaReceived(String nmea) {
+                        mMessageParser.putNmeaMessage(nmea);
+                    }
+
+                    @Override
+                    protected void onSirfReceived(byte[] buf, int offset, int length) {
+                        mMessageParser.putSirfMessage(buf, offset, length);
+                    }
+
+                    @Override
+                    protected void onBufferFlushed() {
+                    }
+                };
 
                 try {
-                    while(true) {
-                        rcvd =  mInputStream.read(buf, 0, buf.length);
-                        if (rcvd >= 0) {
-                            /*
-                            try {
-                                //mLocalSocketThread.write(buf, 0, rcvd);
-                            }catch (IOException e) {
-                                // TODO
-                                e.printStackTrace();
-                            }
-                            */
-                        }
-                        if (rcvd < 0)
-                            throw new IOException("EOF");
-                    }
+                    inputReader.loop();
                 }catch (IOException e) {
                     synchronized(this) {
                         if (mUsbController!=null) mUsbController.detach();
-                        //mInputStream = RtklibLocalSocketThread.DummyInputStream.instance;
-                        //mOutputStream = RtklibLocalSocketThread.DummyOutputStream.instance;
+                        mInputStream = DummyInputStream.instance;
+                        mOutputStream = DummyOutputStream.instance;
                         throwIfCancelRequested();
+                        if (DBG) e.printStackTrace();
                     }
                 }
             }
@@ -391,6 +431,39 @@ public class UsbGpsManager {
 
         private class CancelRequestedException extends Exception {
             private static final long serialVersionUID = 1L;
+        }
+    }
+
+    static class DummyInputStream extends InputStream {
+
+        public static final DummyInputStream instance = new DummyInputStream();
+
+        private DummyInputStream() {}
+
+        @Override
+        public int read() throws IOException {
+            return -1;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+            return -1;
+        }
+    }
+
+    static class DummyOutputStream extends OutputStream  {
+
+        public static final DummyOutputStream instance = new DummyOutputStream();
+
+        private DummyOutputStream() {}
+
+        @Override
+        public void write(int arg0) throws IOException {
+        }
+
+        @Override
+        public void write(byte[] buffer, int offset, int count)
+                throws IOException {
         }
     }
 

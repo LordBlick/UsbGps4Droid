@@ -28,6 +28,7 @@ import android.app.DialogFragment;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
+import android.hardware.usb.UsbManager;
 import android.os.Bundle;
 import android.preference.PreferenceActivity;
 import android.preference.PreferenceManager;
@@ -54,8 +55,16 @@ public class UsbGpsActivity extends PreferenceActivity implements SettingsFragme
                     R.xml.pref, false);
             getFragmentManager().beginTransaction().replace(android.R.id.content,
                     new SettingsFragment()).commit();
+            proxyIfUsbAttached(getIntent());
         }
    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        proxyIfUsbAttached(intent);
+    }
+
 
 	@Override
     public void displayAboutDialog(){
@@ -97,6 +106,18 @@ public class UsbGpsActivity extends PreferenceActivity implements SettingsFragme
         intent.putExtra(key, enabled);
         startService(intent);
     }
+
+    private void proxyIfUsbAttached(Intent intent) {
+
+        if (intent == null) return;
+
+        if (!UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) return;
+
+        final Intent proxyIntent = new Intent(UsbGpsConverter.ACTION_USB_DEVICE_ATTACHED);
+        proxyIntent.putExtras(intent.getExtras());
+        sendBroadcast(proxyIntent);
+    }
+
 
 	public static class AboutDialogFragment extends DialogFragment {
 

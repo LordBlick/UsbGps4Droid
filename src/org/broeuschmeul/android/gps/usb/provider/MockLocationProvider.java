@@ -5,10 +5,15 @@ import android.location.Criteria;
 import android.location.Location;
 import android.location.LocationManager;
 import android.location.LocationProvider;
+import android.os.Handler;
+import android.os.Message;
 import android.os.SystemClock;
 import android.text.TextUtils;
 
 public class MockLocationProvider {
+
+
+    public static final String DEFAULT_NAME = "external";
 
     /**
      * External device status
@@ -44,7 +49,11 @@ public class MockLocationProvider {
         }
     }
 
-    private static String mName;
+    private static final int MESSAGE_NEW_LOCATION = 0;
+
+    private String mName;
+
+    private boolean mReplaceInternalGpsOnStart;
 
     private boolean mAttached;
 
@@ -52,11 +61,24 @@ public class MockLocationProvider {
 
     private Status mDeviceStatus;
 
+    final private Location mLastKnownLocation;
+
+    @SuppressWarnings("unused")
+    private boolean mHasLastKnownLocation;
+
+    private Handler mHandler;
+
+    public MockLocationProvider() {
+        this(DEFAULT_NAME);
+    }
 
     public MockLocationProvider(String name) {
         if (TextUtils.isEmpty(name)) throw new IllegalArgumentException();
         mName = name;
         mAttached = false;
+        mReplaceInternalGpsOnStart = false;
+        mLastKnownLocation = new Location(mName);
+        mHasLastKnownLocation = false;
         mDeviceStatus = Status.OUT_OF_SERVICE;
     }
 
@@ -88,6 +110,14 @@ public class MockLocationProvider {
 
         mLocationManager = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
 
+        try {
+            mLocationManager.removeTestProvider(mName);
+        }catch (IllegalArgumentException ignore) {
+
+        }catch (NullPointerException npe) {
+            npe.printStackTrace(); // WTF???
+        }
+
         mLocationManager.addTestProvider(mName,
                 /* requiresNetwork */ false,
                 /* requiresSatellite */ true,
@@ -101,6 +131,11 @@ public class MockLocationProvider {
 
         mAttached = true;
 
+        synchronized (this) {
+            mHandler = new Handler(mHandlerCallback);
+        }
+
+        replaceInternalGps(mReplaceInternalGpsOnStart);
         if (mDeviceStatus != Status.OUT_OF_SERVICE) {
             mLocationManager.setTestProviderStatus(mName,
                     mDeviceStatus.getLocationProviderStatus(),
@@ -116,9 +151,14 @@ public class MockLocationProvider {
     public void detach() {
         if (!mAttached) return;
 
+        mLocationManager.setTestProviderEnabled(mName, false);
         mLocationManager.removeTestProvider(mName);
-
+        mAttached = false;
         mLocationManager = null;
+
+        synchronized (this) {
+            mHandler = null;
+        }
     }
 
     /**
@@ -154,12 +194,13 @@ public class MockLocationProvider {
      * @param replace
      * @throws SecurityException if the ACCESS_MOCK_LOCATION permission is not present or
      *         the Settings.Secure.ALLOW_MOCK_LOCATION} system setting is not enabled
-     * @throws IllegalStateException if provider is not attached
      */
     public void replaceInternalGps(boolean replace) throws SecurityException, IllegalStateException {
-        if (!mAttached) throw new IllegalStateException();
-
-        mLocationManager.setTestProviderEnabled(mName, replace);
+        if (!mAttached) {
+            mReplaceInternalGpsOnStart = replace;
+        }else {
+            mLocationManager.setTestProviderEnabled(mName, replace);
+        }
     }
 
     /**
@@ -171,7 +212,7 @@ public class MockLocationProvider {
 
     /**
      * Set external device status
-     * @param status {link Status#OUT_OF_SERVICE}, {@link Status#TEMPORARILY_UNAVAILABLE}, {@link Status#AVAILABLE}
+     * @param status {@link Status#OUT_OF_SERVICE}, {@link Status#TEMPORARILY_UNAVAILABLE}, {@link Status#AVAILABLE}
      * @see LocationManager#setTestProviderStatus(String, int, android.os.Bundle, long)
      */
     public void setDeviceStatus(Status status) {
@@ -191,12 +232,47 @@ public class MockLocationProvider {
      * @see LocationManager#setTestProviderLocation(String, Location)
      */
     public void setLocation(Location location) throws IllegalArgumentException {
-        if (mAttached) {
+        final Handler handler;
+        synchronized (this) {
+            handler = mHandler;
+        }
+        if (handler != null) {
+            handler.obtainMessage(MESSAGE_NEW_LOCATION, location).sendToTarget();
+        }
+    }
+
+    private void setNewLocation(final Location l) {
+
+        if (l == null) {
+            mHasLastKnownLocation = false;
+            if (mDeviceStatus == Status.AVAILABLE) {
+                setDeviceStatus(Status.TEMPORARILY_UNAVAILABLE);
+            }
+        }else {
+            mHasLastKnownLocation = true;
+            mLastKnownLocation.set(l);
             if (mDeviceStatus == Status.TEMPORARILY_UNAVAILABLE) {
                 setDeviceStatus(Status.AVAILABLE);
             }
-            mLocationManager.setTestProviderLocation(mName, location);
+            if (mAttached) {
+                mLocationManager.setTestProviderLocation(mName, l);
+            }
         }
     }
+
+
+    private final Handler.Callback mHandlerCallback = new Handler.Callback() {
+
+        @Override
+        public boolean handleMessage(Message msg) {
+            switch (msg.what) {
+                case MESSAGE_NEW_LOCATION:
+                    setNewLocation((Location)msg.obj);
+                    return true;
+            }
+            return false;
+        }
+
+    };
 
 }
