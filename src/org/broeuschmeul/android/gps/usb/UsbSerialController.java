@@ -58,8 +58,8 @@ public abstract class UsbSerialController {
 	public abstract void setBaudRate(int baudRate);
 	public abstract int getBaudRate();
 
-	public abstract InputStream getInputStream();
-	public abstract OutputStream getOutputStream();
+	public abstract UsbSerialInputStream getInputStream();
+	public abstract UsbSerialOutputStream getOutputStream();
 
 	public boolean hasPermission() {
 		return this.mUsbManager.hasPermission(this.mUsbDevice);
@@ -127,7 +127,15 @@ public abstract class UsbSerialController {
 
 	}
 
-	protected class UsbSerialInputStream extends InputStream {
+	public interface UsbSerialStream {
+	    public int getFileDescriptor();
+
+        public int getMaxPacketSize();
+
+        public int getEndpointAddress();
+	}
+
+	public class UsbSerialInputStream extends InputStream implements UsbSerialStream {
 
 		private static final int DEFAULT_READ_TIMEOUT_MS = 30000;
 		private int mTimeout = DEFAULT_READ_TIMEOUT_MS;
@@ -135,6 +143,9 @@ public abstract class UsbSerialController {
 		private UsbDeviceConnection mUsbConnection;
 		private UsbEndpoint mUsbEndpoint;
 		private byte rcvPkt[] = null;
+
+		protected UsbSerialInputStream() {
+		}
 
 		public UsbSerialInputStream(UsbDeviceConnection connection,
 				UsbEndpoint bulkInEndpoint,
@@ -149,6 +160,21 @@ public abstract class UsbSerialController {
 		public UsbSerialInputStream(UsbDeviceConnection connection,
 				UsbEndpoint bulkOutEndpoint) {
 			this(connection, bulkOutEndpoint, DEFAULT_READ_TIMEOUT_MS);
+		}
+
+		@Override
+        public int getFileDescriptor() {
+		    return mUsbConnection.getFileDescriptor();
+		}
+
+		@Override
+        public int getMaxPacketSize() {
+		    return mUsbEndpoint.getMaxPacketSize();
+		}
+
+		@Override
+		public int getEndpointAddress() {
+		    return mUsbEndpoint.getAddress();
 		}
 
 		@Override
@@ -187,7 +213,7 @@ public abstract class UsbSerialController {
 		}
 	}
 
-	protected class UsbSerialOutputStream extends OutputStream {
+	public class UsbSerialOutputStream extends OutputStream implements UsbSerialStream {
 
 		private static final int DEFAULT_WRITE_TIMEOUT_MS = 2000;
 		private int mTimeout = DEFAULT_WRITE_TIMEOUT_MS;
@@ -210,6 +236,21 @@ public abstract class UsbSerialController {
 				UsbEndpoint bulkOutEndpoint) {
 			this(connection, bulkOutEndpoint, DEFAULT_WRITE_TIMEOUT_MS);
 		}
+
+        @Override
+        public int getFileDescriptor() {
+            return mUsbConnection.getFileDescriptor();
+        }
+
+        @Override
+        public int getMaxPacketSize() {
+            return mUsbEndpoint.getMaxPacketSize();
+        }
+
+        @Override
+        public int getEndpointAddress() {
+            return mUsbEndpoint.getAddress();
+        }
 
 		@Override
 		public void write(int arg0) throws IOException {

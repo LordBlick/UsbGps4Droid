@@ -8,16 +8,19 @@ import android.content.IntentFilter;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
 import android.location.Location;
+import android.location.LocationManager;
+import android.os.Bundle;
 import android.os.ConditionVariable;
 import android.util.Log;
 
 import org.broeuschmeul.android.gps.usb.UsbSerialController;
 import org.broeuschmeul.android.gps.usb.UsbSerialController.UsbControllerException;
+import org.broeuschmeul.android.gps.usb.UsbSerialController.UsbSerialInputStream;
+import org.broeuschmeul.android.gps.usb.UsbSerialController.UsbSerialOutputStream;
 import org.broeuschmeul.android.gps.usb.UsbUtils;
 import org.broeuschmeul.android.gps.usb.provider.MockLocationProvider.Status;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 
 public class UsbGpsConverter {
@@ -36,11 +39,17 @@ public class UsbGpsConverter {
 
     public static final int RECONNECT_TIMEOUT_MS = 2000;
 
+    /* mObject is used by native code, do not remove or rename */
+    protected long mObject;
+
 
     private final Context mContext;
     final UsbReceiver mUsbReceiver;
     private Callbacks mCallbacks;
     private MockLocationProvider mLocationProvider;
+
+    private final Location mReportedLocation = new Location("");
+    private final Bundle mReportedLocationBundle = new Bundle(1);
 
     public interface Callbacks {
 
@@ -70,10 +79,18 @@ public class UsbGpsConverter {
         mLocationProvider = provider;
         mUsbReceiver = new UsbReceiver();
         mCallbacks = sDummyCallbacks;
+        native_create();
+    }
+
+    @Override
+    protected void finalize() throws Throwable {
+        native_destroy();
+        super.finalize();
     }
 
     public void start() {
-        mLocationProvider.attach(mContext);
+        final LocationManager lm = (LocationManager)mContext.getSystemService(Context.LOCATION_SERVICE);
+        mLocationProvider.attach(lm);
         mUsbReceiver.start();
     }
 
@@ -106,6 +123,56 @@ public class UsbGpsConverter {
     public void setCallbacks(Callbacks callbacks) {
         if (callbacks == null) throw new IllegalStateException();
         mCallbacks = callbacks;
+    }
+
+    /**
+     * Called from native code
+     */
+    synchronized void reportLocation(
+            long time,
+            double latitude,
+            double longitude,
+            double altitude,
+            float accuracy,
+            float bearing,
+            float speed,
+            int satellites,
+            boolean isValid,
+            boolean hasAccuracy,
+            boolean hasAltitude,
+            boolean hasBearing,
+            boolean hasSpeed
+            ) {
+
+        if (!isValid) {
+            mLocationProvider.setLocation(null);
+            return;
+        }
+
+        mReportedLocation.reset();
+        mReportedLocation.setTime(time);
+        mReportedLocation.setLatitude(latitude);
+        mReportedLocation.setLongitude(longitude);
+        if (hasAltitude) {
+            mReportedLocation.setAltitude(altitude);
+        }
+        if (hasAccuracy) {
+            mReportedLocation.setAccuracy(accuracy);
+        }
+        if (hasBearing) {
+            mReportedLocation.setBearing(bearing);
+        }
+        if (hasSpeed) {
+            mReportedLocation.setSpeed(speed);
+        }
+
+        if (satellites > 0) {
+            mReportedLocationBundle.putInt("satellites", satellites);
+            mReportedLocation.setExtras(mReportedLocationBundle);
+        }
+
+        mLocationProvider.setLocation(mReportedLocation);
+        if (DBG) Log.v(TAG, "loc: " + mReportedLocation);
     }
 
     private class UsbReceiver {
@@ -247,8 +314,8 @@ public class UsbGpsConverter {
 
         private class UsbServiceThread extends Thread {
 
-            private InputStream mInputStream;
-            private OutputStream mOutputStream;
+            private UsbSerialInputStream mInputStream;
+            private UsbSerialOutputStream mOutputStream;
 
             private int mConnectionState;
             private volatile boolean cancelRequested;
@@ -258,8 +325,8 @@ public class UsbGpsConverter {
             private final ConditionVariable serialControllerSet;
 
             public UsbServiceThread() {
-                mInputStream = DummyInputStream.instance;
-                mOutputStream = DummyOutputStream.instance;
+                mInputStream = null;
+                mOutputStream = null;
                 mConnectionState = STATE_IDLE;
                 cancelRequested = false;
                 mUsbController = null;
@@ -396,17 +463,18 @@ public class UsbGpsConverter {
                     }
                 };
 
-                try {
-                    inputReader.loop();
-                }catch (IOException e) {
-                    synchronized(this) {
-                        if (mUsbController!=null) mUsbController.detach();
-                        mInputStream = DummyInputStream.instance;
-                        mOutputStream = DummyOutputStream.instance;
+                //try {
+                    native_read_loop(mInputStream, mOutputStream);
+                    //inputReader.loop();
+                //}catch (IOException e) {
+                  //  synchronized(this) {
+                   //     if (mUsbController!=null) mUsbController.detach();
+                   //     mInputStream = null;
+                   //     mOutputStream = null;
                         throwIfCancelRequested();
-                        if (DBG) e.printStackTrace();
-                    }
-                }
+                    //    if (DBG) e.printStackTrace();
+                   // }
+                //}
             }
 
             @Override
@@ -434,39 +502,13 @@ public class UsbGpsConverter {
         }
     }
 
-    static class DummyInputStream extends InputStream {
+    private native void native_create();
+    private native void native_read_loop(UsbSerialInputStream inputStream, UsbSerialOutputStream outputStream);
+    private native void native_destroy();
 
-        public static final DummyInputStream instance = new DummyInputStream();
-
-        private DummyInputStream() {}
-
-        @Override
-        public int read() throws IOException {
-            return -1;
-        }
-
-        @Override
-        public int read(byte[] buffer, int offset, int length) throws IOException {
-            return -1;
-        }
+    static {
+        System.loadLibrary("usbconverter");
     }
-
-    static class DummyOutputStream extends OutputStream  {
-
-        public static final DummyOutputStream instance = new DummyOutputStream();
-
-        private DummyOutputStream() {}
-
-        @Override
-        public void write(int arg0) throws IOException {
-        }
-
-        @Override
-        public void write(byte[] buffer, int offset, int count)
-                throws IOException {
-        }
-    }
-
 
 
 }

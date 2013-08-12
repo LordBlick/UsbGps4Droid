@@ -1,6 +1,5 @@
 package org.broeuschmeul.android.gps.usb.provider;
 
-import android.content.Context;
 import android.location.Criteria;
 import android.location.Location;
 import android.location.LocationManager;
@@ -53,6 +52,8 @@ public class MockLocationProvider {
 
     private String mName;
 
+    private String mAttachedName;
+
     private boolean mReplaceInternalGpsOnStart;
 
     private boolean mAttached;
@@ -66,7 +67,7 @@ public class MockLocationProvider {
     @SuppressWarnings("unused")
     private boolean mHasLastKnownLocation;
 
-    private Handler mHandler;
+    private volatile Handler mHandler;
 
     public MockLocationProvider() {
         this(DEFAULT_NAME);
@@ -103,22 +104,21 @@ public class MockLocationProvider {
      *  Settings.Secure.ALLOW_MOCK_LOCATION system setting is not enabled
      * @throws IllegalArgumentException if a provider with the given name already exists
      */
-    public void attach(Context context) throws SecurityException, IllegalArgumentException {
-        if (context == null) throw new NullPointerException();
-
+    public void attach(LocationManager lm) {
         if (mAttached) return;
 
-        mLocationManager = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
+        mLocationManager = lm;
+
+        mAttachedName = mReplaceInternalGpsOnStart ? LocationManager.GPS_PROVIDER : mName;
 
         try {
-            mLocationManager.removeTestProvider(mName);
+            mLocationManager.removeTestProvider(mAttachedName);
         }catch (IllegalArgumentException ignore) {
-
         }catch (NullPointerException npe) {
             npe.printStackTrace(); // WTF???
         }
 
-        mLocationManager.addTestProvider(mName,
+        mLocationManager.addTestProvider(mAttachedName,
                 /* requiresNetwork */ false,
                 /* requiresSatellite */ true,
                 /* requiresCell */    false,
@@ -135,14 +135,14 @@ public class MockLocationProvider {
             mHandler = new Handler(mHandlerCallback);
         }
 
-        replaceInternalGps(mReplaceInternalGpsOnStart);
+        mLocationManager.setTestProviderEnabled(mAttachedName, true);
+
         if (mDeviceStatus != Status.OUT_OF_SERVICE) {
-            mLocationManager.setTestProviderStatus(mName,
+            mLocationManager.setTestProviderStatus(mAttachedName,
                     mDeviceStatus.getLocationProviderStatus(),
                     null,
                     SystemClock.elapsedRealtime());
         }
-
     }
 
     /**
@@ -151,9 +151,10 @@ public class MockLocationProvider {
     public void detach() {
         if (!mAttached) return;
 
-        mLocationManager.setTestProviderEnabled(mName, false);
-        mLocationManager.removeTestProvider(mName);
+        mLocationManager.setTestProviderEnabled(mAttachedName, false);
+        mLocationManager.removeTestProvider(mAttachedName);
         mAttached = false;
+        mAttachedName = null;
         mLocationManager = null;
 
         synchronized (this) {
@@ -196,10 +197,11 @@ public class MockLocationProvider {
      *         the Settings.Secure.ALLOW_MOCK_LOCATION} system setting is not enabled
      */
     public void replaceInternalGps(boolean replace) throws SecurityException, IllegalStateException {
-        if (!mAttached) {
-            mReplaceInternalGpsOnStart = replace;
-        }else {
-            mLocationManager.setTestProviderEnabled(mName, replace);
+        mReplaceInternalGpsOnStart = replace;
+        if (mAttached) {
+            LocationManager lm = mLocationManager;
+            detach();
+            attach(lm);
         }
     }
 
@@ -220,7 +222,7 @@ public class MockLocationProvider {
         mDeviceStatus = status;
 
         if (mAttached) {
-            mLocationManager.setTestProviderStatus(mName,
+            mLocationManager.setTestProviderStatus(mAttachedName,
                     mDeviceStatus.getLocationProviderStatus(),
                     null,
                     SystemClock.elapsedRealtime());
@@ -231,13 +233,9 @@ public class MockLocationProvider {
      *
      * @see LocationManager#setTestProviderLocation(String, Location)
      */
-    public void setLocation(Location location) throws IllegalArgumentException {
-        final Handler handler;
-        synchronized (this) {
-            handler = mHandler;
-        }
-        if (handler != null) {
-            handler.obtainMessage(MESSAGE_NEW_LOCATION, location).sendToTarget();
+    public synchronized void setLocation(Location location) throws IllegalArgumentException {
+        if (mHandler != null) {
+            mHandler.obtainMessage(MESSAGE_NEW_LOCATION, location).sendToTarget();
         }
     }
 
@@ -251,11 +249,12 @@ public class MockLocationProvider {
         }else {
             mHasLastKnownLocation = true;
             mLastKnownLocation.set(l);
+            mLastKnownLocation.setProvider(mAttachedName);
             if (mDeviceStatus == Status.TEMPORARILY_UNAVAILABLE) {
                 setDeviceStatus(Status.AVAILABLE);
             }
             if (mAttached) {
-                mLocationManager.setTestProviderLocation(mName, l);
+                mLocationManager.setTestProviderLocation(mAttachedName, mLastKnownLocation);
             }
         }
     }

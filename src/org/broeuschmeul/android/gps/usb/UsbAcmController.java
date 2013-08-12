@@ -28,9 +28,6 @@ import android.util.Log;
 
 import org.broeuschmeul.android.gps.usb.provider.BuildConfig;
 
-import java.io.InputStream;
-import java.io.OutputStream;
-
 /* USB CDC ACM (Communication Device Class Abstract Control Model) */
 public class UsbAcmController extends UsbSerialController {
 
@@ -279,12 +276,12 @@ public class UsbAcmController extends UsbSerialController {
     }
 
     @Override
-    public synchronized InputStream getInputStream() {
+    public synchronized UsbSerialInputStream getInputStream() {
         return inputStream;
     }
 
     @Override
-    public synchronized OutputStream getOutputStream() {
+    public synchronized UsbSerialOutputStream getOutputStream() {
         return outputStream;
     }
 
