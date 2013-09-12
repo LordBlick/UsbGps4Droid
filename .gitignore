@@ -2,6 +2,7 @@
 /gen
 /libs
 /obj
+/proguard
 #*.dex
 #*.apk
 #resources.ap_

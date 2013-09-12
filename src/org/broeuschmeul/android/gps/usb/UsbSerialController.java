@@ -29,6 +29,8 @@ import android.util.Log;
 
 import org.broeuschmeul.android.gps.usb.provider.BuildConfig;
 
+import proguard.annotation.KeepClassMembers;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -127,6 +129,7 @@ public abstract class UsbSerialController {
 
 	}
 
+	@KeepClassMembers
 	public interface UsbSerialStream {
 	    public int getFileDescriptor();
 

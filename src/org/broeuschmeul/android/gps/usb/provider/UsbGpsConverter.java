@@ -20,6 +20,8 @@ import org.broeuschmeul.android.gps.usb.UsbSerialController.UsbSerialOutputStrea
 import org.broeuschmeul.android.gps.usb.UsbUtils;
 import org.broeuschmeul.android.gps.usb.provider.MockLocationProvider.Status;
 
+import proguard.annotation.Keep;
+
 import java.io.IOException;
 import java.io.OutputStream;
 
@@ -40,6 +42,7 @@ public class UsbGpsConverter {
     public static final int RECONNECT_TIMEOUT_MS = 2000;
 
     /* mObject is used by native code, do not remove or rename */
+    @Keep
     protected long mObject;
 
 
@@ -128,6 +131,7 @@ public class UsbGpsConverter {
     /**
      * Called from native code
      */
+    @Keep
     synchronized void reportLocation(
             long time,
             double latitude,
@@ -428,53 +432,8 @@ public class UsbGpsConverter {
 
 
             private void transferDataLoop() throws CancelRequestedException {
-                int rcvd;
-                final byte buf[] = new byte[4096];
-                final GpsInputReader inputReader;
-                final GpsMessageParser mMessageParser;
-
-                mMessageParser = new GpsMessageParser() {
-
-                    @Override
-                    public void setNewLocation(Location l) {
-                        mLocationProvider.setLocation(l);
-                    }
-
-                };
-
-                inputReader = new GpsInputReader(mInputStream) {
-
-                    @Override
-                    protected void onRawDataReceived(byte[] buf, int offset, int length) {
-                    }
-
-                    @Override
-                    protected void onNmeaReceived(String nmea) {
-                        mMessageParser.putNmeaMessage(nmea);
-                    }
-
-                    @Override
-                    protected void onSirfReceived(byte[] buf, int offset, int length) {
-                        mMessageParser.putSirfMessage(buf, offset, length);
-                    }
-
-                    @Override
-                    protected void onBufferFlushed() {
-                    }
-                };
-
-                //try {
-                    native_read_loop(mInputStream, mOutputStream);
-                    //inputReader.loop();
-                //}catch (IOException e) {
-                  //  synchronized(this) {
-                   //     if (mUsbController!=null) mUsbController.detach();
-                   //     mInputStream = null;
-                   //     mOutputStream = null;
-                        throwIfCancelRequested();
-                    //    if (DBG) e.printStackTrace();
-                   // }
-                //}
+                native_read_loop(mInputStream, mOutputStream);
+                throwIfCancelRequested();
             }
 
             @Override
