@@ -36,7 +36,7 @@ import android.preference.PreferenceManager;
 import android.util.Log;
 import android.widget.Toast;
 
-import org.broeuschmeul.android.gps.usb.UsbSerialController;
+import org.broeuschmeul.android.gps.usb.SerialLineConfiguration;
 
 import java.io.BufferedWriter;
 import java.io.File;
@@ -56,6 +56,7 @@ import java.util.Locale;
  */
 public class UsbGpsProviderService extends Service {
 
+    @SuppressWarnings("unused")
     private static final boolean DBG = BuildConfig.DEBUG & true;
     static final String TAG = UsbGpsProviderService.class.getSimpleName();
 
@@ -74,8 +75,12 @@ public class UsbGpsProviderService extends Service {
 	public static final String PREF_TRACK_RECORDING = "trackRecording";
 	public static final String PREF_TRACK_FILE_DIR = "trackFileDirectory";
 	public static final String PREF_TRACK_FILE_PREFIX = "trackFilePrefix";
-	public static final String PREF_GPS_DEVICE = "usbDevice";
-	public static final String PREF_GPS_DEVICE_SPEED = "gpsDeviceSpeed";
+	public static final String PREF_USB_SERIAL_SETTINGS = "usbSerialSettings";
+	public static final String PREF_USB_SERIAL_BAUDRATE = "usbSerialBaudrate";
+	public static final String PREF_USB_SERIAL_DATA_BITS = "usbSerialDataBits";
+	public static final String PREF_USB_SERIAL_PARITY = "usbSerialParity";
+	public static final String PREF_USB_SERIAL_STOP_BITS = "usbSerialStopBits";
+	public static final String PREF_USB_SERIAL_LAST_KNOWN_AUTO_BAUDRATE = "usbSerialLastKnownAutoBaudrate";
 	public static final String PREF_ABOUT = "about";
 
 	/**
@@ -146,7 +151,7 @@ public class UsbGpsProviderService extends Service {
         final String providerName;
         final MockLocationProvider provider;
         final boolean replaceInternalGps;
-        final String usbBaudrate;
+        final SerialLineConfiguration usbSerialLineConf;
 
         if (isServiceStarted()) return;
 
@@ -154,19 +159,14 @@ public class UsbGpsProviderService extends Service {
         providerName = prefs.getString(PREF_MOCK_GPS_NAME,
                 MockLocationProvider.DEFAULT_NAME);
         replaceInternalGps = prefs.getBoolean(PREF_REPLACE_STD_GPS, false);
-        usbBaudrate = prefs.getString(PREF_GPS_DEVICE_SPEED,
-                String.valueOf(UsbSerialController.DEFAULT_BAUDRATE));
+
+        usbSerialLineConf = SettingsFragment.UsbSerialSettings.readConf(prefs);
 
         provider = new MockLocationProvider(providerName);
         provider.replaceInternalGps(replaceInternalGps);
 
         mConverter.setLocationProvider(provider);
-        try {
-            mConverter.setBaudRate(Integer.valueOf(usbBaudrate));
-        } catch (NumberFormatException nfe) {
-            nfe.printStackTrace();
-        }
-
+        mConverter.setSerialLineConfiguration(usbSerialLineConf);
         mConverter.start();
 
         Notification notification = createForegroundNotification();

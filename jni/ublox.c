@@ -14,7 +14,7 @@
 #define LOGV(...)  do {} while (0)
 #endif
 
-inline int looks_like_ublox(uint8_t *msg, size_t max_len) {
+inline int looks_like_ublox(const uint8_t *msg, size_t max_len) {
   unsigned payload_length;
   uint8_t ck_a, ck_b;
   unsigned i;

@@ -18,7 +18,7 @@
 #endif
 
 static void parse_tracker_data(const uint8_t *msg, size_t msg_size,
-    struct location_t *dst, struct gps_msg_status_t *status);
+    struct gps_msg_status_t *status);
 static unsigned sirf_csum(const uint8_t *payload, unsigned payload_length);
 
 static inline uint16_t get2u(const uint8_t *buf);
@@ -67,7 +67,6 @@ inline int looks_like_sirf(const uint8_t *msg, size_t max_len)
 
 void reset_sirf_parser(struct sirf_parser_t *ctx)
 {
-  ctx->location.is_valid = false;
 }
 
 bool put_sirf_msg(struct sirf_parser_t *ctx, const uint8_t *msg,
@@ -78,10 +77,14 @@ bool put_sirf_msg(struct sirf_parser_t *ctx, const uint8_t *msg,
   assert(msg_size > 1 &&  msg_size <= SIRF_MAX);
   assert((size_t)looks_like_sirf(msg, msg_size) == msg_size);
 
+  ctx->stats->rcvd.sirf.total += 1;
+  ctx->stats->rcvd.sirf.last_msg_ts = ctx->stats->rcvd.last_byte_ts;
+
   mid = msg[4];
   switch (mid) {
     case 41:
-      parse_tracker_data(msg, msg_size, &ctx->location, status);
+      parse_tracker_data(msg, msg_size, status);
+      ctx->stats->rcvd.sirf.mid41 += 1;
       break;
     default:
       status->is_valid = true;
@@ -94,7 +97,7 @@ bool put_sirf_msg(struct sirf_parser_t *ctx, const uint8_t *msg,
 }
 
 static void parse_tracker_data(const uint8_t *msg, size_t msg_size,
-    struct location_t *dst, struct gps_msg_status_t *status)
+    struct gps_msg_status_t *status)
 {
   unsigned payload_size;
   unsigned nav_type;
@@ -151,7 +154,7 @@ static void parse_tracker_data(const uint8_t *msg, size_t msg_size,
   /* Number of satellites used to derive the fix */
   l.satellites = msg[92];
 
-  *dst = l;
+  status->location = l;
   status->is_valid = true;
   status->location_changed = true;
   status->err[0] = '\0';

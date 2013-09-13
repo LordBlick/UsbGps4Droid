@@ -28,6 +28,11 @@
     <string name="pref_start_gps_summary_off">Usb GPS is off</string>
     <string name="pref_start_gps_summary_on">Usb GPS is on</string>
     <string name="pref_start_gps_params_title">GPS Options (SiRF)</string>
+    <string name="pref_usb_serial_settings">USB Serial settings</string>
+    <string name="pref_usb_serial_baudrate_title">Baudrate</string>
+    <string name="pref_usb_serial_data_bits_title">Data bits</string>
+    <string name="pref_usb_serial_parity_title">Parity</string>
+    <string name="pref_usb_serial_stop_bits_title">Stop bits</string>
     <string name="pref_gps_location_provider_title">Location provider options</string>
     <string name="pref_gps_location_provider_summary">Usb GPS will replace internal GPS</string>
     <string name="pref_replace_std_gps_title">Replace internal GPS</string>
@@ -116,6 +121,7 @@
     </plurals>
     <string name="service_closed_because_connection_problem_notification_title">UsbGps stopped</string>
     <string name="service_closed_because_connection_problem_notification">"Reason: %s"</string>
+    <string name="msg_failed_to_autobaud">Failed to autobaud</string>
     
     <string name="about_title">About</string>
     <string name="about_version">UsbGPS4Droid version</string>
@@ -131,15 +137,22 @@
     <string name="about_sources">The source code is available from Git repository on the project website: 
         https://github.com/HvB/UsbGps4Droid
     </string>
-    <string-array name="pref_gps_device_speed_values">
-        <item >auto</item>
-        <item >1200</item>
-        <item >2400</item>
+    <string-array name="pref_usb_serial_baudrate_entries">
+        <item >Autodetect</item>
         <item >4800</item>
         <item >9600</item>
         <item >19200</item>
         <item >38400</item>
         <item >57600</item>
         <item >115200</item>
-    </string-array>
+    </string-array>    
+	<string-array name="pref_usb_serial_parity_entries">
+		<item>None</item>
+		<item>Odd</item>
+		<item>Even</item>
+		<item>Mark</item>
+		<item>Space</item>
+	</string-array>
+    
+    
 </resources>

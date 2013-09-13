@@ -43,8 +43,6 @@ public abstract class UsbSerialController {
 	private static final String TAG = UsbSerialController.class.getSimpleName();
     private static final boolean D = BuildConfig.DEBUG & true;
 
-    public static final int DEFAULT_BAUDRATE = 4800;
-
     protected UsbManager mUsbManager;
 	protected UsbDevice mUsbDevice;
 
@@ -57,8 +55,16 @@ public abstract class UsbSerialController {
 	public abstract void attach() throws UsbControllerException;
 	public abstract void detach();
 
-	public abstract void setBaudRate(int baudRate);
-	public abstract int getBaudRate();
+	/**
+	 * Set serial line configuration
+	 */
+	public abstract void setSerialLineConfiguration(final SerialLineConfiguration config);
+
+	/**
+	 * @return serial line configuration
+	 */
+	public abstract SerialLineConfiguration getSerialLineConfiguration();
+
 
 	public abstract UsbSerialInputStream getInputStream();
 	public abstract UsbSerialOutputStream getOutputStream();

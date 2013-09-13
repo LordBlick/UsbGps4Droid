@@ -32,14 +32,9 @@
 #define EXCEPTION_ILLEGAL_STATE "java/lang/IllegalStateException"
 #define EXCEPTION_NULL_POINTER  "java/lang/NullPointerException"
 
-
 static jfieldID m_object_field;
-
 static jmethodID method_report_location;
-
-struct native_ctx_t {
-  void *pointer;
-};
+static jmethodID method_on_gps_message_received;
 
 struct usb_read_stream_t {
   int fd;
@@ -48,11 +43,16 @@ struct usb_read_stream_t {
 
   int rxbuf_pos;
   uint8_t rx_buf[MAX_BUF_SIZE];
+
+  jobject rx_buf_direct;
 };
 
-struct usb_reader_ctx_t {
+struct native_ctx_t {
+  bool msg_rcvd_cb_active;
+
   struct nmea_parser_t nmea;
   struct sirf_parser_t sirf;
+  struct stats_t       stats;
   struct usb_read_stream_t stream;
 };
 
@@ -66,14 +66,18 @@ struct gps_msg_metadata {
   bool is_truncated;
 };
 
-static void read_loop(JNIEnv *env, jobject this, struct usb_reader_ctx_t *stream);
-static void handle_rcvd(JNIEnv *env, jobject this, struct usb_reader_ctx_t *reader);
-static void handle_timedout(JNIEnv *env, jobject this, struct usb_reader_ctx_t *reader);
+static void read_loop(JNIEnv *env, jobject this, struct native_ctx_t *stream);
+static void handle_rcvd(JNIEnv *env, jobject this,
+    struct native_ctx_t *reader, unsigned rcvd_last);
+static void handle_timedout(JNIEnv *env, jobject this, struct native_ctx_t *reader);
 static int find_msg(uint8_t *buf, int start_pos, int buf_size, struct gps_msg_metadata *res);
-static bool handle_msg(JNIEnv *env, jobject this, struct usb_reader_ctx_t *reader, uint8_t *msg, struct gps_msg_metadata *metadata);
+static bool handle_msg(JNIEnv *env, jobject this, struct native_ctx_t *reader, uint8_t *msg, struct gps_msg_metadata *metadata);
+static void report_msg_rcvd(JNIEnv *env, jobject this, struct native_ctx_t *reader, uint8_t *msg, struct gps_msg_metadata *metadata);
 static void report_location(JNIEnv *env, jobject this, struct location_t *location);
 
+static inline struct native_ctx_t *get_ctx(JNIEnv* env, jobject thiz);
 static inline void throw_exception(JNIEnv *env, const char *clazzName, const char *message);
+
 
 static void native_create(JNIEnv* env, jobject thiz)
 {
@@ -88,6 +92,12 @@ static void native_create(JNIEnv* env, jobject thiz)
     return;
   }
 
+  stats_init(&nctx->stats);
+  nctx->nmea.stats = &nctx->stats;
+  nctx->sirf.stats = &nctx->stats;
+
+  nctx->msg_rcvd_cb_active = true;
+
   (*env)->SetLongField(env, thiz, m_object_field, (long)nctx);
 }
 
@@ -97,11 +107,13 @@ static void native_destroy(JNIEnv *env, jobject thiz)
 
   LOGV("native_destroy()");
 
-  nctx = (struct native_ctx_t *)(uintptr_t)(*env)->GetLongField(env, thiz, m_object_field);
+  nctx = get_ctx(env, thiz);
   if (nctx == NULL) {
     LOGV("nctx is null");
     return;
   }
+
+  stats_destroy(&nctx->stats);
 
   free(nctx);
   (*env)->SetLongField(env, thiz, m_object_field, 0L);
@@ -114,7 +126,12 @@ static void native_read_loop(JNIEnv *env, jobject this,
   static jmethodID method_get_ostream_fd;
   static jmethodID method_get_istream_max_pkt_size;
   static jmethodID method_get_istream_ep_addr;
-  struct usb_reader_ctx_t reader;
+  jobject direct_buf;
+  struct native_ctx_t *reader;
+
+  reader = get_ctx(env, this);
+  if (reader == NULL)
+    return throw_exception(env, EXCEPTION_NULL_POINTER, "mObject is null");
 
   if (j_input_stream == NULL)
     return throw_exception(env, EXCEPTION_NULL_POINTER, "inputStream is null");
@@ -150,34 +167,69 @@ static void native_read_loop(JNIEnv *env, jobject this,
       return;
   }
 
-  reset_nmea_parser(&reader.nmea);
-  reset_sirf_parser(&reader.sirf);
+  direct_buf = (*env)->NewDirectByteBuffer(env, reader->stream.rx_buf,
+      sizeof(reader->stream.rx_buf));
+  if (direct_buf == NULL)
+    return;
+ reader->stream.rx_buf_direct = (*env)->NewGlobalRef(env, direct_buf);
 
-  reader.stream.fd = (*env)->CallIntMethod(env, j_input_stream, method_get_istream_fd);
-  if (reader.stream.fd < 0)
+ reader->stream.fd = (*env)->CallIntMethod(env, j_input_stream, method_get_istream_fd);
+  if (reader->stream.fd < 0)
     return;
 
-  reader.stream.max_pkt_size = (*env)->CallIntMethod(env, j_input_stream, method_get_istream_max_pkt_size);
-  if (reader.stream.max_pkt_size <= 0)
+  reader->stream.max_pkt_size = (*env)->CallIntMethod(env, j_input_stream, method_get_istream_max_pkt_size);
+  if (reader->stream.max_pkt_size <= 0)
     return;
 
-  reader.stream.endpoint = (*env)->CallIntMethod(env, j_input_stream, method_get_istream_ep_addr);
+  reader->stream.endpoint = (*env)->CallIntMethod(env, j_input_stream, method_get_istream_ep_addr);
 
-  LOGV("istream_fd: %i, endpoint: 0x%x, max_pkt_size: %i", reader.stream.fd,
-      reader.stream.endpoint, reader.stream.max_pkt_size);
+  LOGV("istream_fd: %i, endpoint: 0x%x, max_pkt_size: %i", reader->stream.fd,
+      reader->stream.endpoint, reader->stream.max_pkt_size);
 
+  read_loop(env, this, reader);
 
-  read_loop(env, this, &reader);
+  (*env)->DeleteGlobalRef(env, reader->stream.rx_buf_direct);
 }
 
-static void read_loop(JNIEnv *env, jobject this, struct usb_reader_ctx_t *reader)
+static void native_get_stats(JNIEnv *env, jobject this, jobject dst)
+{
+  struct native_ctx_t *reader;
+
+  if (dst == NULL)
+    return throw_exception(env, EXCEPTION_NULL_POINTER, "dst is null");
+
+  reader = get_ctx(env, this);
+  if (reader == NULL)
+    return throw_exception(env, EXCEPTION_NULL_POINTER, "mObject is null");
+
+  stats_export_to_java(env, &reader->stats, dst);
+}
+
+static void native_msg_rcvd_cb(JNIEnv *env, jobject this, jboolean enable)
+{
+  struct native_ctx_t *reader;
+  reader = get_ctx(env, this);
+  if (reader == NULL)
+    return throw_exception(env, EXCEPTION_NULL_POINTER, "mObject is null");
+
+  reader->msg_rcvd_cb_active = enable;
+}
+
+static void read_loop(JNIEnv *env, jobject this, struct native_ctx_t *reader)
 {
   int rcvd;
   struct usb_read_stream_t *stream;
 
-  stream = &reader->stream;
+  reset_nmea_parser(&reader->nmea);
+  reset_sirf_parser(&reader->sirf);
 
+  stats_lock(&reader->stats);
+  stats_start_unlocked(&reader->stats);
+  stats_unlock(&reader->stats);
+
+  stream = &reader->stream;
   stream->rxbuf_pos = 0;
+
   for (;;) {
     struct usbdevfs_bulktransfer ctrl;
 
@@ -190,7 +242,6 @@ static void read_loop(JNIEnv *env, jobject this, struct usb_reader_ctx_t *reader
     rcvd = ioctl(stream->fd, USBDEVFS_BULK, &ctrl);
     if (rcvd < 0) {
       if (errno == ETIMEDOUT) {
-        // XXX: timeout
         LOGV("usb read timeout");
         handle_timedout(env, this, reader);
         continue;
@@ -203,20 +254,21 @@ static void read_loop(JNIEnv *env, jobject this, struct usb_reader_ctx_t *reader
       continue;
     }else {
       stream->rxbuf_pos += rcvd;
-      handle_rcvd(env, this, reader);
+      handle_rcvd(env, this, reader, (unsigned)rcvd);
     }
   }
 }
 
-static void handle_timedout(JNIEnv *env, jobject this, struct usb_reader_ctx_t *reader)
+static void handle_timedout(JNIEnv *env, jobject this, struct native_ctx_t *reader)
 {
   struct gps_msg_status_t status;
   put_nmea_timedout(&reader->nmea, &status);
   if (status.location_changed)
-    report_location(env, this, &reader->nmea.location);
+    report_location(env, this, &status.location);
 }
 
-static void handle_rcvd(JNIEnv *env, jobject this, struct usb_reader_ctx_t *reader) {
+static void handle_rcvd(JNIEnv *env, jobject this,
+    struct native_ctx_t *reader, unsigned rcvd_last) {
   int pred_msg_pos, msg_pos;
   int pred_msg_len;
   struct gps_msg_metadata msg;
@@ -227,6 +279,10 @@ static void handle_rcvd(JNIEnv *env, jobject this, struct usb_reader_ctx_t *read
   if (stream->rxbuf_pos == 0)
     return;
 
+  stats_lock(&reader->stats);
+  reader->stats.rcvd.bytes += rcvd_last;
+  clock_gettime(CLOCK_MONOTONIC, &reader->stats.rcvd.last_byte_ts);
+
   pred_msg_pos = 0;
   pred_msg_len = 0;
   msg_pos = find_msg(stream->rx_buf, 0, stream->rxbuf_pos, &msg);
@@ -234,13 +290,15 @@ static void handle_rcvd(JNIEnv *env, jobject this, struct usb_reader_ctx_t *read
 
     // No nessages found in buffer
     if (msg_pos < 0) {
-      LOGV("junk %u", stream->rxbuf_pos);
+      // LOGV("junk %u", stream->rxbuf_pos);
+      reader->stats.rcvd.junk += stream->rxbuf_pos;
       stream->rxbuf_pos = 0;
       break;
     }
     // Junk between messages
     if (pred_msg_pos + pred_msg_len != msg_pos) {
-      LOGV("inter msg junk %u", msg_pos - pred_msg_pos - pred_msg_len);
+      reader->stats.rcvd.junk += msg_pos - pred_msg_pos - pred_msg_len;
+      //LOGV("inter msg junk %u", msg_pos - pred_msg_pos - pred_msg_len);
     }
 
     if (!msg.is_truncated) {
@@ -253,6 +311,7 @@ static void handle_rcvd(JNIEnv *env, jobject this, struct usb_reader_ctx_t *read
         if (stream->rxbuf_pos == sizeof(stream->rx_buf)) {
           pred_msg_pos = msg_pos+1;
           pred_msg_len = 0;
+          reader->stats.rcvd.junk += 1;
           // FALLTHROUGH
         }else {
           break;
@@ -272,6 +331,7 @@ static void handle_rcvd(JNIEnv *env, jobject this, struct usb_reader_ctx_t *read
     assert(pred_msg_pos+pred_msg_len < stream->rxbuf_pos);
     msg_pos = find_msg(stream->rx_buf, pred_msg_pos+pred_msg_len, stream->rxbuf_pos, &msg);
   }
+  stats_unlock(&reader->stats);
 }
 
 static int find_msg(uint8_t *buf, int start_pos, int buf_size, struct gps_msg_metadata *res)
@@ -325,60 +385,64 @@ static int find_msg(uint8_t *buf, int start_pos, int buf_size, struct gps_msg_me
 
 static bool handle_msg(JNIEnv *env,
     jobject this,
-    struct usb_reader_ctx_t *reader,
+    struct native_ctx_t *reader,
     uint8_t *msg,
     struct gps_msg_metadata *metadata) {
 
-  bool is_valid;
-  struct gps_msg_status_t status;
+  struct gps_msg_status_t result;
 
   assert(env);
   assert(this);
   assert(msg);
   assert(metadata);
 
+  if (reader->msg_rcvd_cb_active) {
+    stats_unlock(&reader->stats);
+    report_msg_rcvd(env, this, reader, msg, metadata);
+    stats_lock(&reader->stats);
+  }
+
   switch (metadata->type) {
     case MSG_TYPE_NMEA:
-      put_nmea_msg(&reader->nmea, msg, metadata->size, &status);
-      is_valid = status.is_valid;
-      if (status.err[0] != '\0') {
-        if (status.is_valid)
-          LOGV("WARN: %s", status.err);
-        else
-          LOGV("%s", status.err);
-      }
-      if (status.location_changed)
-        report_location(env, this, &reader->nmea.location);
+      put_nmea_msg(&reader->nmea, msg, metadata->size, &result);
       break;
     case MSG_TYPE_SIRF:
-      {
-        assert(metadata->size > 8);
-        assert(msg[0] == 0xa0);
-        put_sirf_msg(&reader->sirf, msg,  metadata->size, &status);
-        is_valid = status.is_valid;
-        if (status.err[0] != '\0') {
-          if (status.is_valid)
-            LOGV("WARN: %s", status.err);
-          else
-            LOGV("%s", status.err);
-        }
-        if (status.location_changed)
-          report_location(env, this, &reader->sirf.location);
-      }
+      put_sirf_msg(&reader->sirf, msg,  metadata->size, &result);
       break;
     case MSG_TYPE_UBLOX:
       {
         assert(metadata->size > 8);
         assert(msg[0] == 0xb5);
         LOGV("U-BLOX: 0x%02hhx:%02hhx", msg[2], msg[3]);
-        is_valid = true;
+        result.is_valid = true;
+        result.location_changed = false;
+        result.err[0] = '\0';
+
+        reader->stats.rcvd.ublox.total += 1;
+        reader->stats.rcvd.ublox.last_msg_ts = reader->stats.rcvd.last_byte_ts;
       }
       break;
     default:
-      is_valid = false;
+      result.is_valid = true;
+      result.location_changed = false;
+      result.err[0] = '\0';
       break;
   }
-  return is_valid;
+
+  if (result.err[0] != '\0') {
+    if (result.is_valid)
+      LOGV("WARN: %s", result.err);
+    else
+      LOGV("%s", result.err);
+  }
+
+  if (result.location_changed) {
+    stats_unlock(&reader->stats);
+    report_location(env, this, &result.location);
+    stats_lock(&reader->stats);
+  }
+
+  return result.is_valid;
 }
 
 static void report_location(JNIEnv *env, jobject this, struct location_t *location)
@@ -400,10 +464,25 @@ static void report_location(JNIEnv *env, jobject this, struct location_t *locati
       );
 }
 
+static void report_msg_rcvd(JNIEnv *env, jobject this, struct native_ctx_t *reader, uint8_t *msg, struct gps_msg_metadata *metadata)
+{
+  (*env)->CallVoidMethod(env, this, method_on_gps_message_received,
+      reader->stream.rx_buf_direct,
+      msg - reader->stream.rx_buf,
+      metadata->size,
+      metadata->type
+      );
+}
+
 static inline void throw_exception(JNIEnv *env, const char *clazzName, const char *message) {
   (*env)->ThrowNew(env,
       (*env)->FindClass(env, clazzName),
       message);
+}
+
+static inline struct native_ctx_t *get_ctx(JNIEnv* env, jobject thiz)
+{
+  return (struct native_ctx_t *)(uintptr_t)(*env)->GetLongField(env, thiz, m_object_field);
 }
 
 static JNINativeMethod native_methods[] = {
@@ -412,12 +491,15 @@ static JNINativeMethod native_methods[] = {
   {"native_read_loop", "("
     "Lorg/broeuschmeul/android/gps/usb/UsbSerialController$UsbSerialInputStream;"
       "Lorg/broeuschmeul/android/gps/usb/UsbSerialController$UsbSerialOutputStream;"
-      ")V", (void*)native_read_loop}
+      ")V", (void*)native_read_loop},
+  { "native_get_stats",
+    "(Lorg/broeuschmeul/android/gps/usb/provider/StatsNative;)V",
+    (void*)native_get_stats},
+  { "native_msg_rcvd_cb", "(Z)V", (void*)native_msg_rcvd_cb }
 };
 
 int register_usb_converter_natives(JNIEnv* env) {
-  /* look up the class */
-  jclass clazz = (*env)->FindClass(env, "org/broeuschmeul/android/gps/usb/provider/UsbGpsConverter");
+  jclass clazz = (*env)->FindClass(env, "org/broeuschmeul/android/gps/usb/provider/UsbGpsConverter$UsbReceiver$UsbServiceThread");
 
   if (clazz == NULL)
     return JNI_FALSE;
@@ -433,6 +515,11 @@ int register_usb_converter_natives(JNIEnv* env) {
   method_report_location = (*env)->GetMethodID(env,
       clazz, "reportLocation", "(JDDDFFFIZZZZZ)V");
   if (method_report_location == NULL)
+    return JNI_FALSE;
+
+  method_on_gps_message_received = (*env)->GetMethodID(env,
+      clazz, "onGpsMessageReceived", "(Ljava/nio/ByteBuffer;III)V");
+  if (method_on_gps_message_received == NULL)
     return JNI_FALSE;
 
   return JNI_TRUE;

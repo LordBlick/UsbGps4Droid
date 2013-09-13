@@ -85,5 +85,45 @@
     <string name="sirf_bin_to_nmea_alt" formatted="false">8102%02X01%02X01%02X01%02X01%02X01%02X01%02X01%02X01%02X010001%04X</string>
     <string name="sirf_bin_dgps_ext_on">85020000000000</string>
     <string name="sirf_bin_dgps_sbas_on">85010000000000</string>
-    <string name="sirf_software_version">8400</string>   
+    <string name="sirf_software_version">8400</string>
+    
+    <integer-array name="usb_serial_auto_baudrate_probe_list">
+        <!-- Default NMEA, BU-353s4, BU-353-W, BR-355s4, GT-100, NL-302U, NL-442U -->
+        <item>4800</item> 
+        <!-- DG-100, NL-422MP, NL-464US, NL-6002U -->
+        <item>38400</item> 
+        <!-- BU-353GLONASS -->
+        <item>115200</item>
+        <!-- NL-662U --> 
+        <item>9600</item>
+        <!-- BU-353s4 SiRF  -->
+        <item>19200</item> 
+        <item>57600</item>
+    </integer-array>
+	<string-array name="pref_usb_serial_baudrate_values">
+        <item >auto</item>
+        <item >4800</item>
+        <item >9600</item>
+        <item >19200</item>
+        <item >38400</item>
+        <item >57600</item>
+        <item >115200</item>
+    </string-array>
+	<string-array name="pref_usb_serial_data_bits_values">
+		<item>5</item>
+		<item>6</item>
+		<item>7</item>
+		<item>8</item>
+	</string-array>
+	<string-array name="pref_usb_serial_parity_values">
+		<item>N</item>
+		<item>O</item>
+		<item>E</item>
+		<item>M</item>
+		<item>S</item>
+	</string-array>
+	<string-array name="pref_usb_serial_stop_bits_entries">
+		<item>1</item>
+		<item>2</item>
+	</string-array>
 </resources>

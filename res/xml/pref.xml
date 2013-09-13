@@ -24,30 +24,45 @@
 <PreferenceScreen
 	xmlns:android="http://schemas.android.com/apk/res/android"
 	android:title="@string/app_name" >
-	<ListPreference 
-		android:dialogTitle="@string/pref_gps_device_title"
-		android:title="@string/pref_gps_device_title" 
-		android:key="@string/pref_gps_device_key" 	
-		android:summary="@string/pref_gps_device_summary" />
-	<ListPreference 
-		android:enabled="true"
-		android:dialogTitle="@string/pref_gps_device_speed_title"
-		android:title="@string/pref_gps_device_speed_title" 
-		android:dependency="@string/pref_start_gps_key"
-		android:key="@string/pref_gps_device_speed_key"
-		android:persistent="true"
-		android:entries="@array/pref_gps_device_speed_values"
-		android:entryValues="@array/pref_gps_device_speed_values"
-		android:defaultValue="@string/defaultGpsDeviceSpeed"
-	/>
-	<CheckBoxPreference 
-		android:dependency="@string/pref_gps_device_key"
+	
+	<SwitchPreference 
 		android:key="@string/pref_start_gps_key"
 		android:persistent="true"
 		android:disableDependentsState="true"
 		android:title="@string/pref_start_gps_title"
 		android:summaryOn="@string/pref_start_gps_summary_on"
 		android:summaryOff="@string/pref_start_gps_summary_off" />
+    
+    <PreferenceScreen
+        android:key="usbSerialSettings"
+        android:title="@string/pref_usb_serial_settings"
+        android:dependency="@string/pref_start_gps_key" >
+		<ListPreference
+        	android:key="usbSerialBaudrate"
+        	android:title="@string/pref_usb_serial_baudrate_title"
+        	android:entries="@array/pref_usb_serial_baudrate_entries"
+        	android:entryValues="@array/pref_usb_serial_baudrate_values"
+        	android:defaultValue="38400" />
+    	<ListPreference
+        	android:key="usbSerialDataBits"
+        	android:title="@string/pref_usb_serial_data_bits_title"
+        	android:entries="@array/pref_usb_serial_data_bits_values"
+        	android:entryValues="@array/pref_usb_serial_data_bits_values"
+        	android:defaultValue="8" />
+    	<ListPreference
+        	android:key="usbSerialParity"
+        	android:title="@string/pref_usb_serial_parity_title"
+        	android:entries="@array/pref_usb_serial_parity_entries"
+        	android:entryValues="@array/pref_usb_serial_parity_values"
+        	android:defaultValue="N" />
+    	<ListPreference
+	        android:key="usbSerialStopBits"
+        	android:title="@string/pref_usb_serial_stop_bits_title"
+        	android:entries="@array/pref_usb_serial_stop_bits_entries"
+        	android:entryValues="@array/pref_usb_serial_stop_bits_entries"
+        	android:defaultValue="1" />
+	</PreferenceScreen>
+    
 	<PreferenceScreen
 		android:dependency="@string/pref_start_gps_key"
 		android:shouldDisableView="true"

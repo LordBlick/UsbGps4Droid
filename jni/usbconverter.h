@@ -3,6 +3,7 @@
 #ifndef _USBCONVERTER_H
 #define _USBCONVERTER_H
 
+#include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -138,20 +139,63 @@ struct nmea_fix_t {
 struct nmea_parser_t {
   struct tm time_full;        /* Curent time and date, UTC */
   struct nmea_fix_t fix;
-  struct location_t location;
 
   struct nmea_gpgsa_t gpgsa;
   struct nmea_gpvtg_t gpvtg;
+
+  struct stats_t *stats;
 };
 
 struct sirf_parser_t {
-  struct location_t location;
+  struct stats_t *stats;
 };
 
 struct gps_msg_status_t  {
   bool is_valid;
   bool location_changed;
+  struct location_t location;
   char err[200];
+};
+
+struct stats_t {
+  pthread_mutex_t mtx;
+
+  struct timespec start_ts;
+
+  struct {
+    unsigned long long bytes;
+    unsigned long long junk;
+
+    struct timespec last_byte_ts;
+
+    struct {
+      unsigned total;
+      unsigned gga;
+      unsigned rmc;
+      unsigned gll;
+      unsigned gst;
+      unsigned gsa;
+      unsigned vtg;
+      unsigned zda;
+      unsigned gsv;
+      unsigned pubx;
+      unsigned other;
+
+      struct timespec last_msg_ts;
+    } nmea;
+
+    struct {
+      unsigned total;
+      unsigned mid41;
+      struct timespec last_msg_ts;
+    } sirf;
+
+    struct {
+      unsigned total;
+      struct timespec last_msg_ts;
+    } ublox;
+
+  } rcvd;
 };
 
 /* usbconverter.c */
@@ -169,6 +213,15 @@ void reset_sirf_parser(struct sirf_parser_t *ctx);
 bool put_sirf_msg(struct sirf_parser_t *ctx, const uint8_t *msg, size_t msg_size, struct gps_msg_status_t *res);
 
 /* ublox.c */
-inline int looks_like_ublox(uint8_t *msg, size_t max_len);
+inline int looks_like_ublox(const uint8_t *msg, size_t max_len);
+
+/* stats.c */
+void stats_init(struct stats_t *stats);
+void stats_destroy(struct stats_t *stats);
+void stats_lock(struct stats_t *stats);
+void stats_unlock(struct stats_t *stats);
+void stats_reset_unlocked(struct stats_t *stats);
+void stats_start_unlocked(struct stats_t *stats);
+void stats_export_to_java(JNIEnv *env, struct stats_t *stats, jobject j_dst);
 
 #endif /* _USBCONVERTER_H  */

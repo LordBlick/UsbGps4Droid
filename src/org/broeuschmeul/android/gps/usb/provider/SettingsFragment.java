@@ -23,23 +23,21 @@
 package org.broeuschmeul.android.gps.usb.provider;
 
 import android.app.Activity;
-import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
 import android.content.res.Resources;
-import android.hardware.usb.UsbDevice;
-import android.hardware.usb.UsbEndpoint;
-import android.hardware.usb.UsbInterface;
-import android.hardware.usb.UsbManager;
 import android.os.Bundle;
 import android.preference.EditTextPreference;
 import android.preference.ListPreference;
 import android.preference.Preference;
 import android.preference.PreferenceFragment;
+import android.preference.PreferenceGroup;
 import android.preference.PreferenceScreen;
-import android.util.Log;
+import android.widget.BaseAdapter;
 
-import java.util.HashMap;
+import org.broeuschmeul.android.gps.usb.SerialLineConfiguration;
+import org.broeuschmeul.android.gps.usb.SerialLineConfiguration.Parity;
+import org.broeuschmeul.android.gps.usb.SerialLineConfiguration.StopBits;
 
 /**
  * A SettingsFragment Class used to configure, start and stop the NMEA tracker service.
@@ -49,7 +47,9 @@ import java.util.HashMap;
  */
 public class SettingsFragment extends PreferenceFragment {
 
+    @SuppressWarnings("unused")
     private static final boolean DBG = BuildConfig.DEBUG & false;
+    @SuppressWarnings("unused")
     private static final String TAG = SettingsFragment.class.getSimpleName();
 
     public interface Callbacks {
@@ -78,14 +78,12 @@ public class SettingsFragment extends PreferenceFragment {
 
     private Callbacks mCallbacks = sDummyCallbacks;
 
-    private String deviceName = "";
 
-    private UsbManager usbManager;
-
-    private ListPreference mGpsDevicePreference, mDeviceSpeedPreference;
     private EditTextPreference mMockGpsNamePreference, mConnectionRetriesPreference;
     private Preference mTrackRecordingPreference;
     private PreferenceScreen mGpsLocationProviderPreference;
+
+    private UsbSerialSettings mUsbSerialSettings;
 
     @Override
     public void onAttach(Activity activity) {
@@ -97,7 +95,6 @@ public class SettingsFragment extends PreferenceFragment {
         }
 
         mCallbacks = (Callbacks)activity;
-        usbManager = (UsbManager) activity.getSystemService(Context.USB_SERVICE);
     }
 
     @Override
@@ -105,8 +102,7 @@ public class SettingsFragment extends PreferenceFragment {
         super.onCreate(savedInstanceState);
         addPreferencesFromResource(R.xml.pref);
 
-        mGpsDevicePreference = (ListPreference)findPreference(UsbGpsProviderService.PREF_GPS_DEVICE);
-        mDeviceSpeedPreference = (ListPreference)findPreference(UsbGpsProviderService.PREF_GPS_DEVICE_SPEED);
+        mUsbSerialSettings = new UsbSerialSettings(getPreferenceScreen());
         mTrackRecordingPreference = findPreference(UsbGpsProviderService.PREF_TRACK_RECORDING);
         mMockGpsNamePreference = (EditTextPreference)findPreference(UsbGpsProviderService.PREF_MOCK_GPS_NAME);
         mConnectionRetriesPreference = (EditTextPreference)findPreference(UsbGpsProviderService.PREF_CONNECTION_RETRIES);
@@ -147,9 +143,7 @@ public class SettingsFragment extends PreferenceFragment {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        mGpsDevicePreference = null;
-        mGpsDevicePreference = null;
-        mDeviceSpeedPreference = null;
+        mUsbSerialSettings = null;
         mTrackRecordingPreference = null;
         mMockGpsNamePreference = null;
         mConnectionRetriesPreference = null;
@@ -160,28 +154,6 @@ public class SettingsFragment extends PreferenceFragment {
     public void onDetach() {
         super.onDetach();
         mCallbacks = sDummyCallbacks;
-        usbManager = null;
-    }
-
-    private void updateDevicePreferenceSummary(){
-        final SharedPreferences sharedPref = getPreferenceManager().getSharedPreferences();
-
-        // update USB device summary
-        String defaultDeviceName = "";
-        if (! usbManager.getDeviceList().isEmpty()){
-            defaultDeviceName = usbManager.getDeviceList().keySet().iterator().next();
-        }
-        deviceName = sharedPref.getString(UsbGpsProviderService.PREF_GPS_DEVICE, defaultDeviceName);
-        String deviceDisplayedName = "";
-        if (! usbManager.getDeviceList().isEmpty() && usbManager.getDeviceList().get(deviceName) != null){
-            deviceDisplayedName = usbManager.getDeviceList().get(deviceName).getDeviceName();
-        } else if ((usbManager.getDeviceList().size() == 1) && (usbManager.getDeviceList().get(defaultDeviceName) != null)){
-            deviceDisplayedName = usbManager.getDeviceList().get(defaultDeviceName).getDeviceName();
-            deviceName = defaultDeviceName;
-            mGpsDevicePreference.setValue(defaultDeviceName);
-        }
-        mGpsDevicePreference.setSummary(getString(R.string.pref_gps_device_summary, deviceDisplayedName));
-        mDeviceSpeedPreference.setSummary(getString(R.string.pref_gps_device_speed_summary, sharedPref.getString(UsbGpsProviderService.PREF_GPS_DEVICE_SPEED, getString(R.string.defaultGpsDeviceSpeed))));
     }
 
     private void updateDevicePreferenceList(){
@@ -189,32 +161,7 @@ public class SettingsFragment extends PreferenceFragment {
         final Resources resources = getResources();
         final String mockProviderName;
 
-        // update bluetooth device summary
-        updateDevicePreferenceSummary();
-        // update bluetooth device list
-        HashMap<String, UsbDevice> connectedUsbDevices = usbManager.getDeviceList();
-        String[] entryValues = new String[connectedUsbDevices.size()];
-        String[] entries = new String[connectedUsbDevices.size()];
-        int i = 0;
-        // Loop through usb devices
-        for (String name : connectedUsbDevices.keySet()) {
-            // Add the name and address to the ListPreference enties and entyValues
-            UsbDevice device = connectedUsbDevices.get(name);
-            if (DBG) Log.v(TAG, "device: " + device);
-            for (int k=0; k < device.getInterfaceCount(); k++){
-                UsbInterface usbIntf = device.getInterface(k);
-                for (int j=0; j < usbIntf.getEndpointCount(); j++){
-                    UsbEndpoint endPt = usbIntf.getEndpoint(j);
-                    if (DBG) Log.v(TAG, "endPt: : "+endPt + " type: "+endPt.getType()+ " dir: "+endPt.getDirection() );
-                }
-            }
-            entryValues[i] = device.getDeviceName();
-            entries[i] = name;
-            i++;
-        }
-        mGpsDevicePreference.setEntryValues(entryValues);
-        mGpsDevicePreference.setEntries(entries);
-
+        mUsbSerialSettings.updateSummaries();
         mTrackRecordingPreference.setEnabled(sharedPref.getBoolean(UsbGpsProviderService.PREF_START_GPS_PROVIDER, false));
 
         mockProviderName = mMockGpsNamePreference.getText();
@@ -233,8 +180,7 @@ public class SettingsFragment extends PreferenceFragment {
                 R.plurals.pref_connection_retries_summary, connRetries, connRetries));
 
         if (sharedPref.getBoolean(UsbGpsProviderService.PREF_REPLACE_STD_GPS, true)){
-            String s = getString(R.string.pref_gps_location_provider_summary);
-            mGpsLocationProviderPreference.setSummary(s);
+            mGpsLocationProviderPreference.setSummary(R.string.pref_gps_location_provider_summary);
         } else {
             String s = getString(R.string.pref_mock_gps_name_summary, mockProviderName);
             mGpsLocationProviderPreference.setSummary(s);
@@ -244,7 +190,10 @@ public class SettingsFragment extends PreferenceFragment {
     private final OnSharedPreferenceChangeListener mOnSharedPreferenceChangeListener = new OnSharedPreferenceChangeListener() {
         @Override
         public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
-            if (UsbGpsProviderService.PREF_START_GPS_PROVIDER.equals(key)){
+            if (mUsbSerialSettings.isSerialSettingsPref(key)) {
+                mUsbSerialSettings.updateSummaries();
+                ((BaseAdapter)getPreferenceScreen().getRootAdapter()).notifyDataSetChanged();
+            } else if (UsbGpsProviderService.PREF_START_GPS_PROVIDER.equals(key)){
                 boolean val = sharedPreferences.getBoolean(key, false);
                 if (val){
                     mCallbacks.startGpsProviderService();
@@ -258,10 +207,6 @@ public class SettingsFragment extends PreferenceFragment {
                 } else {
                     mCallbacks.stopTrackRecording();
                 }
-            } else if (UsbGpsProviderService.PREF_GPS_DEVICE.equals(key)){
-                updateDevicePreferenceSummary();
-            } else if (UsbGpsProviderService.PREF_GPS_DEVICE_SPEED.equals(key)){
-                updateDevicePreferenceSummary();
             } else if (UsbGpsProviderService.PREF_SIRF_ENABLE_GLL.equals(key)
                     || UsbGpsProviderService.PREF_SIRF_ENABLE_GGA.equals(key)
                     || UsbGpsProviderService.PREF_SIRF_ENABLE_RMC.equals(key)
@@ -279,5 +224,78 @@ public class SettingsFragment extends PreferenceFragment {
             updateDevicePreferenceList();
         }
     };
+
+    public static class UsbSerialSettings {
+
+        public static final String PREF_USB_SERIAL_AUTO_BAUDRATE_ENTRY = "auto";
+
+        private final PreferenceScreen mSettingsPref;
+        private final ListPreference mBaudratePref, mDataBitsPref, mParityPref, mStopBitsPref;
+
+        public UsbSerialSettings(PreferenceGroup rootScreen) {
+            mSettingsPref = (PreferenceScreen)rootScreen.findPreference(UsbGpsProviderService.PREF_USB_SERIAL_SETTINGS);
+
+            mBaudratePref = (ListPreference)mSettingsPref.findPreference(UsbGpsProviderService.PREF_USB_SERIAL_BAUDRATE);
+            mDataBitsPref = (ListPreference)mSettingsPref.findPreference(UsbGpsProviderService.PREF_USB_SERIAL_DATA_BITS);
+            mParityPref = (ListPreference)mSettingsPref.findPreference(UsbGpsProviderService.PREF_USB_SERIAL_PARITY);
+            mStopBitsPref = (ListPreference)mSettingsPref.findPreference(UsbGpsProviderService.PREF_USB_SERIAL_STOP_BITS);
+        }
+
+
+        public boolean isSerialSettingsPref(String key) {
+            return (UsbGpsProviderService.PREF_USB_SERIAL_BAUDRATE.equals(key)
+                    || UsbGpsProviderService.PREF_USB_SERIAL_DATA_BITS.equals(key)
+                    || UsbGpsProviderService.PREF_USB_SERIAL_PARITY.equals(key)
+                    || UsbGpsProviderService.PREF_USB_SERIAL_STOP_BITS.equals(key)
+                    );
+        }
+
+        public void updateSummaries() {
+            final SerialLineConfiguration serialConf;
+            serialConf = readConf(mSettingsPref.getSharedPreferences());
+
+            mSettingsPref.setSummary(serialConf.toString(mSettingsPref.getContext().getResources()));
+            mBaudratePref.setSummary(mBaudratePref.getEntry());
+            mDataBitsPref.setSummary(mDataBitsPref.getEntry());
+            mParityPref.setSummary(mParityPref.getEntry());
+            mStopBitsPref.setSummary(mStopBitsPref.getEntry());
+        }
+
+        public static SerialLineConfiguration readConf(SharedPreferences prefs) {
+            final SerialLineConfiguration serialConf;
+            final String baudrate, dataBits, parity, stopBits;
+
+            serialConf = new SerialLineConfiguration();
+
+            baudrate = prefs.getString(UsbGpsProviderService.PREF_USB_SERIAL_BAUDRATE, null);
+            dataBits = prefs.getString(UsbGpsProviderService.PREF_USB_SERIAL_DATA_BITS, null);
+            parity = prefs.getString(UsbGpsProviderService.PREF_USB_SERIAL_PARITY, null);
+            stopBits = prefs.getString(UsbGpsProviderService.PREF_USB_SERIAL_STOP_BITS, null);
+
+            if (baudrate != null) {
+                if (PREF_USB_SERIAL_AUTO_BAUDRATE_ENTRY.equals(baudrate)) {
+                    serialConf.setAutoBaudrateDetection(true);
+                }else {
+                    serialConf.setBaudrate(Integer.valueOf(baudrate), false);
+                }
+            }
+
+            if (dataBits != null) {
+                serialConf.setDataBits(Integer.valueOf(dataBits));
+            }
+
+
+            if (parity != null) {
+                serialConf.setParity(Parity.valueOfChar(parity.charAt(0)));
+            }
+
+            if (stopBits != null) {
+                serialConf.setStopBits(StopBits.valueOfString(stopBits));
+            }
+
+            return serialConf;
+        }
+
+    }
 
 }

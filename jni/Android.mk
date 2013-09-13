@@ -10,6 +10,7 @@ LOCAL_SRC_FILES := \
     	nmea.c \
     	sirf.c \
     	ublox.c \
+    	stats.c \
 	usbconverter.c
 
 include $(BUILD_SHARED_LIBRARY)

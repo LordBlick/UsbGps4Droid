@@ -45,12 +45,6 @@ static bool parse_zda(const uint8_t *msg, size_t msg_size,
 static bool parse_gst(const uint8_t *msg, size_t msg_size,
     struct nmea_gpgst_t *dst, struct gps_msg_status_t *status);
 
-/*
-static int put_gsv(struct nmea_parser_t *ctx, const uint8_t *msg, size_t msg_size);
-static int put_gll(struct nmea_parser_t *ctx, const uint8_t *msg, size_t msg_size);
-static int put_vtg(struct nmea_parser_t *ctx, const uint8_t *msg, size_t msg_size);
-*/
-
 static unsigned split_nmea_str(const uint8_t *msg, size_t msg_size,
     const char **fields, int fields_size, char *buf);
 static parse_error_t parse_nmea_fix_time(const char *hhmmss_mss, struct nmea_fix_time_t *dst);
@@ -60,7 +54,7 @@ static parse_error_t parse_float(const char *str, float *dst);
 
 static void open_nmea_fix(struct nmea_fix_t *fix, struct nmea_fix_time_t time);
 static inline bool is_same_fix_time(struct nmea_fix_time_t t1, struct nmea_fix_time_t t2);
-static bool close_nmea_fix(struct nmea_parser_t *ctx);
+static bool close_nmea_fix(struct nmea_parser_t *ctx, struct gps_msg_status_t *status);
 static void merge_full_time(struct nmea_parser_t *ctx);
 static bool compose_location(const struct nmea_parser_t *ctx, struct location_t *dst);
 static bool set_nmea_error(struct gps_msg_status_t *status,
@@ -145,6 +139,9 @@ bool put_nmea_msg(struct nmea_parser_t *ctx, const uint8_t *msg, size_t msg_size
   status->location_changed = false;
   status->err[0] = '\0';
 
+  ctx->stats->rcvd.nmea.last_msg_ts = ctx->stats->rcvd.last_byte_ts;
+  ctx->stats->rcvd.nmea.total += 1;
+
   for (i=0; i < sizeof(msg_id); ++i) {
     if (i >= msg_size) {
       msg_id[i] = '\0';
@@ -169,11 +166,12 @@ bool put_nmea_msg(struct nmea_parser_t *ctx, const uint8_t *msg, size_t msg_size
     struct nmea_gpgga_t gxgga;
     if (parse_gga(msg, msg_size, &gxgga, status)) {
       if (!is_same_fix_time(ctx->fix.fix_time, gxgga.fix_time)) {
-        status->location_changed = close_nmea_fix(ctx);
+        close_nmea_fix(ctx, status);
         open_nmea_fix(&ctx->fix, gxgga.fix_time);
       }
       ctx->fix.gpgga_active = true;
       ctx->fix.gpgga = gxgga;
+      ctx->stats->rcvd.nmea.gga += 1;
     }
   }else if (
       (strcmp("$GPRMC", msg_id) == 0)
@@ -184,59 +182,68 @@ bool put_nmea_msg(struct nmea_parser_t *ctx, const uint8_t *msg, size_t msg_size
     struct nmea_gprmc_t gxrmc;
     if (parse_rmc(msg, msg_size, &gxrmc, status)) {
       if (!is_same_fix_time(ctx->fix.fix_time, gxrmc.fix_time)) {
-        status->location_changed = close_nmea_fix(ctx);
+        close_nmea_fix(ctx, status);
         open_nmea_fix(&ctx->fix, gxrmc.fix_time);
       }
       ctx->fix.gprmc_active = true;
       ctx->fix.gprmc = gxrmc;
+      ctx->stats->rcvd.nmea.rmc += 1;
     }
   }else if (strcmp("$GPGLL", msg_id) == 0) {
     struct nmea_gpgll_t gxgll;
     if (parse_gll(msg, msg_size, &gxgll, status)) {
       if (!is_same_fix_time(ctx->fix.fix_time, gxgll.fix_time)) {
-        status->location_changed = close_nmea_fix(ctx);
+        close_nmea_fix(ctx, status);
         open_nmea_fix(&ctx->fix, gxgll.fix_time);
       }
       ctx->fix.gpgll_active = true;
       ctx->fix.gpgll = gxgll;
+      ctx->stats->rcvd.nmea.gll += 1;
     }
   }else if (strcmp("$GPGST", msg_id) == 0) {
     struct nmea_gpgst_t gpgst;
     if (parse_gst(msg, msg_size, &gpgst, status)) {
       if (!is_same_fix_time(ctx->fix.fix_time, gpgst.fix_time)) {
-        status->location_changed = close_nmea_fix(ctx);
+        close_nmea_fix(ctx, status);
         open_nmea_fix(&ctx->fix, gpgst.fix_time);
       }
       ctx->fix.gpgst_active = true;
       ctx->fix.gpgst = gpgst;
+      ctx->stats->rcvd.nmea.gst += 1;
     }
   }else if (strcmp("$GPGSA", msg_id) == 0) {
     struct nmea_gpgsa_t gpgsa;
     if (parse_gsa(msg, msg_size, &gpgsa, status)) {
       gpgsa.is_valid = true;
       ctx->gpgsa = gpgsa;
+      ctx->stats->rcvd.nmea.gsa += 1;
     }
   }else if (strcmp("$GPVTG", msg_id) == 0) {
     struct nmea_gpvtg_t gpvtg;
     if (parse_vtg(msg, msg_size, &gpvtg, status)) {
       gpvtg.is_valid = true;
       ctx->gpvtg = gpvtg;
+      ctx->stats->rcvd.nmea.vtg += 1;
     }
   }else if (strcmp("$GPZDA", msg_id) == 0) {
     struct nmea_gpzda_t gpzda;
     if (parse_zda(msg, msg_size, &gpzda, status)) {
       ctx->fix.gpzda_active = true;
       ctx->fix.gpzda = gpzda;
+      ctx->stats->rcvd.nmea.zda += 1;
     }
   }else if (strcmp("$GPGSV", msg_id) == 0) {
     // TODO
     status->is_valid = true;
+    ctx->stats->rcvd.nmea.gsv += 1;
   }else if (strcmp("$PUBX", msg_id) == 0) {
     // TODO
     status->is_valid = true;
+    ctx->stats->rcvd.nmea.pubx += 1;
   } else {
     set_nmea_error(status, msg, msg_size, "unk msg");
     status->is_valid = true;
+    ctx->stats->rcvd.nmea.other += 1;
   }
 
   return status->is_valid;
@@ -245,10 +252,9 @@ bool put_nmea_msg(struct nmea_parser_t *ctx, const uint8_t *msg, size_t msg_size
 void put_nmea_timedout(struct nmea_parser_t *ctx, struct gps_msg_status_t *status)
 {
   status->is_valid = false;
-  status->location_changed = close_nmea_fix(ctx);
   status->err[0] = '\0';
+  close_nmea_fix(ctx, status);
 }
-
 
 static bool parse_gga(const uint8_t *msg, size_t msg_size,
     struct nmea_gpgga_t *dst, struct gps_msg_status_t *status)
@@ -851,7 +857,6 @@ void reset_nmea_parser(struct nmea_parser_t *ctx)
 
   ctx->gpgsa.is_valid = false;
   ctx->gpvtg.is_valid = false;
-  ctx->location.is_valid = false;
 }
 
 static void open_nmea_fix(struct nmea_fix_t *fix, struct nmea_fix_time_t time)
@@ -873,45 +878,30 @@ static inline bool fix_ready_to_close(struct nmea_fix_t *fix)
   return false;
 }
 
-static bool close_nmea_fix(struct nmea_parser_t *ctx)
+static bool close_nmea_fix(struct nmea_parser_t *ctx, struct gps_msg_status_t *status)
 {
   struct nmea_fix_t *fix;
-  struct location_t location;
 
   fix = &ctx->fix;
+
+  status->location_changed = false;
 
   if (fix->is_closed)
     return false;
 
+  status->location_changed = true;
   if (!fix->gpgga_active && !fix->gprmc_active && !fix->gpgll_active) {
-    LOGV("No GPGGA/GPGLL/GPRMC sentences received on NMEA fix time %06u.%03u",
+    snprintf(status->err, sizeof(status->err),
+        "No GPGGA/GPGLL/GPRMC sentences received on NMEA fix time %06u.%03u",
         fix->fix_time.hhmmss, fix->fix_time.mss);
     fix->is_closed = true;
-    if (ctx->location.is_valid) {
-      ctx->location.is_valid = false;
-      return true;
-    }else
-      return false;
-  }
-
-  merge_full_time(ctx);
-  compose_location(ctx, &location);
-
-  if (!location.is_valid) {
-    if (ctx->location.is_valid) {
-      ctx->location = location;
-      return true;
-    }else
-      return false;
-  }
-
-  assert(location.is_valid);
-  if (ctx->location.is_valid && (location.time == ctx->location.time)) {
-    return false;
+    status->location.is_valid = false;
   }else {
-    ctx->location = location;
-    return true;
+    merge_full_time(ctx);
+    compose_location(ctx, &status->location);
   }
+
+  return status->location_changed;
 }
 
 static void merge_full_time(struct nmea_parser_t *ctx)
