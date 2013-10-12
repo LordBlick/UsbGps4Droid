@@ -28,7 +28,7 @@
       android:versionName="1.0 beta2">
       
     <uses-feature android:name="android.hardware.usb.host" />
-	<uses-sdk android:targetSdkVersion="18" android:minSdkVersion="12" />
+	<uses-sdk android:targetSdkVersion="18" android:minSdkVersion="14" />
     
 	<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 	<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />

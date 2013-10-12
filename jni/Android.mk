@@ -6,11 +6,12 @@ LOCAL_CFLAGS += -fvisibility=hidden -W -Wall -D_POSIX_C_SOURCE=200112L
 LOCAL_LDLIBS += -llog
 
 LOCAL_SRC_FILES := \
-    	onload.c \
-    	nmea.c \
-    	sirf.c \
-    	ublox.c \
-    	stats.c \
-	usbconverter.c
+        datalogger.c \
+        nmea.c \
+        onload.c \
+        sirf.c \
+        stats.c \
+        ublox.c \
+        usbconverter.c
 
 include $(BUILD_SHARED_LIBRARY)

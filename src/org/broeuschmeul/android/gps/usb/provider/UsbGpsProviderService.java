@@ -29,7 +29,6 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.location.GpsStatus.NmeaListener;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.preference.PreferenceManager;
@@ -37,15 +36,6 @@ import android.util.Log;
 import android.widget.Toast;
 
 import org.broeuschmeul.android.gps.usb.SerialLineConfiguration;
-
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
 
 
 /**
@@ -60,8 +50,6 @@ public class UsbGpsProviderService extends Service {
     private static final boolean DBG = BuildConfig.DEBUG & true;
     static final String TAG = UsbGpsProviderService.class.getSimpleName();
 
-	public static final String ACTION_START_TRACK_RECORDING = "org.broeuschmeul.android.gps.usb.tracker.nmea.intent.action.START_TRACK_RECORDING";
-	public static final String ACTION_STOP_TRACK_RECORDING = "org.broeuschmeul.android.gps.usb.tracker.nmea.intent.action.STOP_TRACK_RECORDING";
 	public static final String ACTION_START_GPS_PROVIDER = "org.broeuschmeul.android.gps.usb.provider.nmea.intent.action.START_GPS_PROVIDER";
 	public static final String ACTION_STOP_GPS_PROVIDER = "org.broeuschmeul.android.gps.usb.provider.nmea.intent.action.STOP_GPS_PROVIDER";
 	public static final String ACTION_CONFIGURE_SIRF_GPS = "org.broeuschmeul.android.gps.usb.provider.nmea.intent.action.CONFIGURE_SIRF_GPS";
@@ -72,7 +60,9 @@ public class UsbGpsProviderService extends Service {
 	public static final String PREF_FORCE_ENABLE_PROVIDER = "forceEnableProvider";
 	public static final String PREF_MOCK_GPS_NAME = "mockGpsName";
 	public static final String PREF_CONNECTION_RETRIES = "connectionRetries";
-	public static final String PREF_TRACK_RECORDING = "trackRecording";
+	public static final String PREF_LOG_RAW_DATA_SCREEN = "logRawDataScreen";
+	public static final String PREF_LOG_RAW_DATA = "logRawData";
+	public static final String PREF_RAW_DATA_LOG_FORMAT = "rawDataLogFormat";
 	public static final String PREF_TRACK_FILE_DIR = "trackFileDirectory";
 	public static final String PREF_TRACK_FILE_PREFIX = "trackFilePrefix";
 	public static final String PREF_USB_SERIAL_SETTINGS = "usbSerialSettings";
@@ -82,11 +72,6 @@ public class UsbGpsProviderService extends Service {
 	public static final String PREF_USB_SERIAL_STOP_BITS = "usbSerialStopBits";
 	public static final String PREF_USB_SERIAL_LAST_KNOWN_AUTO_BAUDRATE = "usbSerialLastKnownAutoBaudrate";
 	public static final String PREF_ABOUT = "about";
-
-	/**
-	 * Tag used for log messages
-	 */
-	private static final String LOG_TAG = "UsbGPS";
 
 	public static final String PREF_SIRF_GPS = "sirfGps";
 	public static final String PREF_SIRF_ENABLE_GGA = "enableGGA";
@@ -101,10 +86,6 @@ public class UsbGpsProviderService extends Service {
 	public static final String PREF_SIRF_ENABLE_STATIC_NAVIGATION = "enableStaticNavigation";
 
 	private UsbGpsConverter mConverter;
-
-	private PrintWriter writer;
-	private File trackFile;
-	private boolean preludeWritten = false;
 
 	@Override
 	public void onCreate() {
@@ -122,8 +103,6 @@ public class UsbGpsProviderService extends Service {
             final String action = intent.getAction();
             if (action.equals(ACTION_START_GPS_PROVIDER)) processStartGpsProvider();
             else if(action.equals(ACTION_STOP_GPS_PROVIDER)) processStopGpsProvider();
-            else if(action.equals(ACTION_START_TRACK_RECORDING)) processStartTrackRecording();
-            else if(action.equals(ACTION_STOP_TRACK_RECORDING)) processStopTrackRecording();
             else if(action.equals(ACTION_CONFIGURE_SIRF_GPS)) processConfigureSirfGps(intent.getExtras());
             else Log.e(TAG, "onStartCommand(): unknown action " + action);
         }
@@ -152,6 +131,7 @@ public class UsbGpsProviderService extends Service {
         final MockLocationProvider provider;
         final boolean replaceInternalGps;
         final SerialLineConfiguration usbSerialLineConf;
+        final DataLoggerConfiguration dataLoggerConf;
 
         if (isServiceStarted()) return;
 
@@ -162,10 +142,13 @@ public class UsbGpsProviderService extends Service {
 
         usbSerialLineConf = SettingsFragment.UsbSerialSettings.readConf(prefs);
 
+        dataLoggerConf = SettingsFragment.DataLoggerSettings.readConf(prefs);
+
         provider = new MockLocationProvider(providerName);
         provider.replaceInternalGps(replaceInternalGps);
 
         mConverter.setLocationProvider(provider);
+        mConverter.setDataLoggerConfiguration(dataLoggerConf);
         mConverter.setSerialLineConfiguration(usbSerialLineConf);
         mConverter.start();
 
@@ -178,35 +161,6 @@ public class UsbGpsProviderService extends Service {
     private void processStopGpsProvider() {
         stop();
         stopSelf();
-    }
-
-    private void processStartTrackRecording() {
-        /*
-        if (trackFile == null){
-            if (mGpsManager != null){
-                beginTrack();
-                mGpsManager.addNmeaListener(mNmeaListener);
-                Toast.makeText(this, getText(R.string.msg_nmea_recording_started),
-                        Toast.LENGTH_SHORT).show();
-            } else {
-                endTrack();
-            }
-        } else {
-            Toast.makeText(this, getText(R.string.msg_nmea_recording_already_started),
-                    Toast.LENGTH_SHORT).show();
-        }
-        */
-    }
-
-    private void processStopTrackRecording() {
-        /*
-        if (mGpsManager != null){
-            mGpsManager.removeNmeaListener(mNmeaListener);
-            endTrack();
-            Toast.makeText(this, getText(R.string.msg_nmea_recording_stopped),
-                    Toast.LENGTH_SHORT).show();
-        }
-        */
     }
 
     private void processConfigureSirfGps(Bundle extras) {
@@ -242,50 +196,6 @@ public class UsbGpsProviderService extends Service {
 
         return notification;
     }
-
-	private void beginTrack(){
-		SimpleDateFormat fmt = new SimpleDateFormat("_yyyy-MM-dd_HH-mm-ss'.nmea'", Locale.US);
-		SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(this);
-		String trackDirName = sharedPreferences.getString(PREF_TRACK_FILE_DIR, this.getString(R.string.defaultTrackFileDirectory));
-		String trackFilePrefix = sharedPreferences.getString(PREF_TRACK_FILE_PREFIX, this.getString(R.string.defaultTrackFilePrefix));
-		trackFile = new File(trackDirName,trackFilePrefix+fmt.format(new Date()));
-		Log.d(LOG_TAG, "Writing the prelude of the NMEA file: "+trackFile.getAbsolutePath());
-		File trackDir = trackFile.getParentFile();
-		try {
-			if ((! trackDir.mkdirs()) && (! trackDir.isDirectory())){
-				Log.e(LOG_TAG, "Error while creating parent dir of NMEA file: "+trackDir.getAbsolutePath());
-			}
-			writer = new PrintWriter(new BufferedWriter(new FileWriter(trackFile)));
-			preludeWritten = true;
-		} catch (IOException e) {
-			Log.e(LOG_TAG, "Error while writing the prelude of the NMEA file: "+trackFile.getAbsolutePath(), e);
-		}
-	}
-	private void endTrack(){
-		if (trackFile != null && writer != null){
-			Log.d(LOG_TAG, "Ending the NMEA file: "+trackFile.getAbsolutePath());
-			preludeWritten = false;
-			writer.close();
-			trackFile = null;
-		}
-	}
-
-	private void addNMEAString(String data){
-		if (! preludeWritten){
-			beginTrack();
-		}
-		Log.v(LOG_TAG, "Adding data in the NMEA file: "+ data);
-		if (trackFile != null && writer != null){
-			writer.print(data);
-		}
-	}
-
-	private final NmeaListener mNmeaListener = new NmeaListener() {
-	    @Override
-	    public void onNmeaReceived(long timestamp, String data) {
-	        addNMEAString(data);
-	    }
-	};
 
 
 }

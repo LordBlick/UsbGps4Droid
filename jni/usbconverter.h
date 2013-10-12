@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <time64.h>
 
 #include "jni.h"
@@ -18,6 +19,8 @@
 
 #define LOOKS_NOT_LIKE_GPS_MSG 0
 #define LOOKS_LIKE_TRUNCATED_MSG -1
+
+#define DATA_LOGGER_BUFFER_SIZE (512*1024)
 
 struct location_t {
   long long time;
@@ -55,6 +58,13 @@ struct nmea_gpgga_t {
   int sattelites_nb;   /* Number of satellites in use (not those in view) */
   float hdop;
   double geoid_height;
+
+  bool has_latitude;
+  bool has_longitude;
+  bool has_altitude;
+  bool has_sattelites_nb;
+  bool has_hdop;
+  bool has_geoid_height;
 };
 
 /* GPRMC Recommended minimum specific GPS/Transit data  */
@@ -66,6 +76,13 @@ struct nmea_gprmc_t {
   bool status_active;  /* GPRMC Status true - active (A), false - void (V) */
   float speed;         /* Speed over ground, m/s */
   float course;        /* True course */
+
+  bool has_latitude;
+  bool has_longitude;
+  bool has_ddmmyy;
+  bool has_status_active;
+  bool has_speed;
+  bool has_course;
 };
 
 /* GPVTG Track Made Good and Ground Speed */
@@ -75,6 +92,12 @@ struct nmea_gpvtg_t {
   float speed_knots;
   float speed_kmph;
   int fix_mode;     /* 'A' - autonomous, D - differential, E - estimated, N - not valid, 0 - undefiend */
+
+  bool has_course_true;
+  bool has_course_magn;
+  bool has_speed_knots;
+  bool has_speed_kmph;
+
   bool is_valid;
 };
 
@@ -84,6 +107,9 @@ struct nmea_gpgll_t {
   double latitude;
   double longitude;
   bool status;       /* Status true - active (A), false - void (V) */
+
+  bool has_latitude;
+  bool has_longitude;
 };
 
 struct nmea_gpgsa_t {
@@ -93,6 +119,11 @@ struct nmea_gpgsa_t {
   float pdop;
   float hdop;
   float vdop;
+
+  bool has_pdop;
+  bool has_hdop;
+  bool has_vdop;
+
   bool is_valid;
 };
 
@@ -106,6 +137,14 @@ struct nmea_gpgst_t {
   float std_lat;       /* Standard deviation of latitude, error in meters */
   float std_lon;       /* Standard deviation of longitude, error in meters */
   float std_alt;       /* Standard deviation of altitude, error in meters */
+
+  bool has_range_rms;
+  bool has_std_major;
+  bool has_std_minor;
+  bool has_orient;
+  bool has_std_lat;
+  bool has_std_lon;
+  bool has_std_alt;
 };
 
 struct nmea_gpzda_t {
@@ -198,22 +237,49 @@ struct stats_t {
   } rcvd;
 };
 
+struct gps_msg_metadata_t {
+  enum {
+    MSG_TYPE_NMEA = 0,
+    MSG_TYPE_SIRF = 1,
+    MSG_TYPE_UBLOX = 2
+  } type;
+  size_t size;
+  bool is_truncated;
+};
+
+struct datalogger_t {
+  pthread_mutex_t mtx;
+  bool enabled;
+  enum {
+    DATALOGGER_FORMAT_RAW = 1,
+    DATALOGGER_FORMAT_NMEA = 2
+  } format;
+
+  char logs_dir[PATH_MAX];
+  char log_prefix[80];
+
+  FILE *cur_file;
+  char cur_file_name[NAME_MAX+PATH_MAX];
+
+  char buffer[DATA_LOGGER_BUFFER_SIZE];
+};
+
 /* usbconverter.c */
 int register_usb_converter_natives(JNIEnv* env);
 
 /* nmea.c */
-inline int looks_like_nmea(const uint8_t *msg, size_t max_len);
+int looks_like_nmea(const uint8_t *msg, size_t max_len);
 void reset_nmea_parser(struct nmea_parser_t *ctx);
 bool put_nmea_msg(struct nmea_parser_t *ctx, const uint8_t *msg, size_t msg_size, struct gps_msg_status_t *res);
 void put_nmea_timedout(struct nmea_parser_t *ctx, struct gps_msg_status_t *status);
 
 /* sirf.c */
-inline int looks_like_sirf(const uint8_t *msg, size_t max_len);
+int looks_like_sirf(const uint8_t *msg, size_t max_len);
 void reset_sirf_parser(struct sirf_parser_t *ctx);
 bool put_sirf_msg(struct sirf_parser_t *ctx, const uint8_t *msg, size_t msg_size, struct gps_msg_status_t *res);
 
 /* ublox.c */
-inline int looks_like_ublox(const uint8_t *msg, size_t max_len);
+int looks_like_ublox(const uint8_t *msg, size_t max_len);
 
 /* stats.c */
 void stats_init(struct stats_t *stats);
@@ -223,5 +289,22 @@ void stats_unlock(struct stats_t *stats);
 void stats_reset_unlocked(struct stats_t *stats);
 void stats_start_unlocked(struct stats_t *stats);
 void stats_export_to_java(JNIEnv *env, struct stats_t *stats, jobject j_dst);
+
+/* datalogger.c */
+void datalogger_init(struct datalogger_t *datalogger);
+bool datalogger_configure(struct datalogger_t * __restrict logger,
+    bool enabled,
+    int format,
+    const char * __restrict tracks_dir,
+    const char * __restrict file_prefix);
+void datalogger_start(struct datalogger_t *logger);
+void datalogger_log_raw_data(struct datalogger_t * __restrict logger,
+    const uint8_t * __restrict buf,
+    size_t size);
+void datalogger_log_msg(struct datalogger_t * __restrict logger,
+    const uint8_t * __restrict msg,
+    const struct gps_msg_metadata_t * __restrict metadata);
+void datalogger_stop(struct datalogger_t *logger);
+void datalogger_destroy(struct datalogger_t *logger);
 
 #endif /* _USBCONVERTER_H  */

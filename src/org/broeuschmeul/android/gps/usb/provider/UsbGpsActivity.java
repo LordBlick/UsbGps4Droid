@@ -30,6 +30,9 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.hardware.usb.UsbManager;
 import android.os.Bundle;
+import android.os.StrictMode;
+import android.os.StrictMode.ThreadPolicy;
+import android.os.StrictMode.VmPolicy;
 import android.preference.PreferenceActivity;
 import android.preference.PreferenceManager;
 import android.text.method.LinkMovementMethod;
@@ -45,6 +48,9 @@ import android.widget.TextView;
  */
 public class UsbGpsActivity extends PreferenceActivity implements SettingsFragment.Callbacks {
 
+    private static final boolean DBG = BuildConfig.DEBUG & true;
+    private static final String TAG = UsbGpsActivity.class.getSimpleName();
+
 	/** Called when the activity is first created. */
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -53,6 +59,14 @@ public class UsbGpsActivity extends PreferenceActivity implements SettingsFragme
         if (savedInstanceState == null) {
             PreferenceManager.setDefaultValues(this,
                     R.xml.pref, false);
+            SettingsFragment.DataLoggerSettings.setDefaultValues(this, false);
+
+            if (DBG) {
+                StrictMode.setThreadPolicy(new ThreadPolicy.Builder()
+                    .detectAll().penaltyLog(). penaltyFlashScreen().build());
+                StrictMode.setVmPolicy(new VmPolicy.Builder().detectAll().penaltyLog().build());
+            }
+
             getFragmentManager().beginTransaction().replace(android.R.id.content,
                     new SettingsFragment()).commit();
             proxyIfUsbAttached(getIntent());
@@ -82,20 +96,6 @@ public class UsbGpsActivity extends PreferenceActivity implements SettingsFragme
     public void stopGpsProviderService() {
         final Intent intent = new Intent(this, UsbGpsProviderService.class);
         intent.setAction(UsbGpsProviderService.ACTION_STOP_GPS_PROVIDER);
-        startService(intent);
-    }
-
-    @Override
-    public void startTrackRecording() {
-        final Intent intent = new Intent(this, UsbGpsProviderService.class);
-        intent.setAction(UsbGpsProviderService.ACTION_START_TRACK_RECORDING);
-        startService(intent);
-    }
-
-    @Override
-    public void stopTrackRecording() {
-        final Intent intent = new Intent(this, UsbGpsProviderService.class);
-        intent.setAction(UsbGpsProviderService.ACTION_STOP_TRACK_RECORDING);
         startService(intent);
     }
 

@@ -23,6 +23,7 @@
 package org.broeuschmeul.android.gps.usb.provider;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
 import android.content.res.Resources;
@@ -32,12 +33,16 @@ import android.preference.ListPreference;
 import android.preference.Preference;
 import android.preference.PreferenceFragment;
 import android.preference.PreferenceGroup;
+import android.preference.PreferenceManager;
 import android.preference.PreferenceScreen;
+import android.preference.SwitchPreference;
+import android.text.TextUtils;
 import android.widget.BaseAdapter;
 
 import org.broeuschmeul.android.gps.usb.SerialLineConfiguration;
 import org.broeuschmeul.android.gps.usb.SerialLineConfiguration.Parity;
 import org.broeuschmeul.android.gps.usb.SerialLineConfiguration.StopBits;
+import org.broeuschmeul.android.gps.usb.provider.DataLoggerConfiguration.Format;
 
 /**
  * A SettingsFragment Class used to configure, start and stop the NMEA tracker service.
@@ -60,10 +65,6 @@ public class SettingsFragment extends PreferenceFragment {
 
         void stopGpsProviderService();
 
-        void startTrackRecording();
-
-        void stopTrackRecording();
-
         void setSirfFeature(String key, boolean enabled);
     }
 
@@ -71,8 +72,6 @@ public class SettingsFragment extends PreferenceFragment {
         @Override public void displayAboutDialog() {}
         @Override public void startGpsProviderService() {}
         @Override public void stopGpsProviderService() {}
-        @Override public void startTrackRecording() {} ;
-        @Override public void stopTrackRecording() {} ;
         @Override public void setSirfFeature(String key, boolean enabled) {} ;
     };
 
@@ -80,10 +79,10 @@ public class SettingsFragment extends PreferenceFragment {
 
 
     private EditTextPreference mMockGpsNamePreference, mConnectionRetriesPreference;
-    private Preference mTrackRecordingPreference;
     private PreferenceScreen mGpsLocationProviderPreference;
 
     private UsbSerialSettings mUsbSerialSettings;
+    private DataLoggerSettings mDataLoggerSettings;
 
     @Override
     public void onAttach(Activity activity) {
@@ -102,8 +101,9 @@ public class SettingsFragment extends PreferenceFragment {
         super.onCreate(savedInstanceState);
         addPreferencesFromResource(R.xml.pref);
 
-        mUsbSerialSettings = new UsbSerialSettings(getPreferenceScreen());
-        mTrackRecordingPreference = findPreference(UsbGpsProviderService.PREF_TRACK_RECORDING);
+        final PreferenceScreen rootScreen = getPreferenceScreen();
+        mUsbSerialSettings = new UsbSerialSettings(rootScreen);
+        mDataLoggerSettings = new DataLoggerSettings(rootScreen);
         mMockGpsNamePreference = (EditTextPreference)findPreference(UsbGpsProviderService.PREF_MOCK_GPS_NAME);
         mConnectionRetriesPreference = (EditTextPreference)findPreference(UsbGpsProviderService.PREF_CONNECTION_RETRIES);
         mGpsLocationProviderPreference = (PreferenceScreen)findPreference(UsbGpsProviderService.PREF_GPS_LOCATION_PROVIDER);
@@ -144,7 +144,7 @@ public class SettingsFragment extends PreferenceFragment {
     public void onDestroy() {
         super.onDestroy();
         mUsbSerialSettings = null;
-        mTrackRecordingPreference = null;
+        mDataLoggerSettings = null;
         mMockGpsNamePreference = null;
         mConnectionRetriesPreference = null;
         mGpsLocationProviderPreference = null;
@@ -162,7 +162,7 @@ public class SettingsFragment extends PreferenceFragment {
         final String mockProviderName;
 
         mUsbSerialSettings.updateSummaries();
-        mTrackRecordingPreference.setEnabled(sharedPref.getBoolean(UsbGpsProviderService.PREF_START_GPS_PROVIDER, false));
+        mDataLoggerSettings.updateSummaries();
 
         mockProviderName = mMockGpsNamePreference.getText();
         mMockGpsNamePreference.setSummary(mockProviderName);
@@ -193,19 +193,15 @@ public class SettingsFragment extends PreferenceFragment {
             if (mUsbSerialSettings.isSerialSettingsPref(key)) {
                 mUsbSerialSettings.updateSummaries();
                 ((BaseAdapter)getPreferenceScreen().getRootAdapter()).notifyDataSetChanged();
+            } else if (mDataLoggerSettings.isDataLoggerSettingsPref(key)) {
+                mDataLoggerSettings.updateSummaries();
+                ((BaseAdapter)getPreferenceScreen().getRootAdapter()).notifyDataSetChanged();
             } else if (UsbGpsProviderService.PREF_START_GPS_PROVIDER.equals(key)){
                 boolean val = sharedPreferences.getBoolean(key, false);
                 if (val){
                     mCallbacks.startGpsProviderService();
                 } else {
                     mCallbacks.stopGpsProviderService();
-                }
-            } else if (UsbGpsProviderService.PREF_TRACK_RECORDING.equals(key)){
-                boolean val = sharedPreferences.getBoolean(key, false);
-                if (val){
-                    mCallbacks.startTrackRecording();
-                } else {
-                    mCallbacks.stopTrackRecording();
                 }
             } else if (UsbGpsProviderService.PREF_SIRF_ENABLE_GLL.equals(key)
                     || UsbGpsProviderService.PREF_SIRF_ENABLE_GGA.equals(key)
@@ -227,7 +223,7 @@ public class SettingsFragment extends PreferenceFragment {
 
     public static class UsbSerialSettings {
 
-        public static final String PREF_USB_SERIAL_AUTO_BAUDRATE_ENTRY = "auto";
+        public static final String PREF_USB_SERIAL_AUTO_BAUDRATE_VALUE = "auto";
 
         private final PreferenceScreen mSettingsPref;
         private final ListPreference mBaudratePref, mDataBitsPref, mParityPref, mStopBitsPref;
@@ -273,7 +269,7 @@ public class SettingsFragment extends PreferenceFragment {
             stopBits = prefs.getString(UsbGpsProviderService.PREF_USB_SERIAL_STOP_BITS, null);
 
             if (baudrate != null) {
-                if (PREF_USB_SERIAL_AUTO_BAUDRATE_ENTRY.equals(baudrate)) {
+                if (PREF_USB_SERIAL_AUTO_BAUDRATE_VALUE.equals(baudrate)) {
                     serialConf.setAutoBaudrateDetection(true);
                 }else {
                     serialConf.setBaudrate(Integer.valueOf(baudrate), false);
@@ -294,6 +290,106 @@ public class SettingsFragment extends PreferenceFragment {
             }
 
             return serialConf;
+        }
+
+    }
+
+    public static class DataLoggerSettings {
+
+        public static final String PREF_LOG_FORMAT_VALUE_RAW = "raw";
+        public static final String PREF_LOG_FORMAT_VALUE_NMEA = "nmea";
+
+        private final PreferenceScreen mSettingsPref;
+        private final SwitchPreference mEnableLogPref;
+        private final ListPreference mRawLogFormatPref;
+        //private final EditTextPreference mTrackfileDirectoryPref;
+        //private final EditTextPreference mTrackfilePrefixPref;
+
+        public DataLoggerSettings(PreferenceGroup rootScreen) {
+            mSettingsPref = (PreferenceScreen)rootScreen.findPreference(UsbGpsProviderService.PREF_LOG_RAW_DATA_SCREEN);
+
+            mEnableLogPref = (SwitchPreference)mSettingsPref.findPreference(UsbGpsProviderService.PREF_LOG_RAW_DATA);
+            mRawLogFormatPref = (ListPreference)mSettingsPref.findPreference(UsbGpsProviderService.PREF_RAW_DATA_LOG_FORMAT);
+            //mTrackfileDirectoryPref = (EditTextPreference)mSettingsPref.findPreference(UsbGpsProviderService.PREF_TRACK_FILE_DIR);
+            //mTrackfilePrefixPref = (EditTextPreference)mSettingsPref.findPreference(UsbGpsProviderService.PREF_TRACK_FILE_PREFIX);
+        }
+
+        public boolean isDataLoggerSettingsPref(String key) {
+            return (UsbGpsProviderService.PREF_LOG_RAW_DATA.equals(key)
+                    || UsbGpsProviderService.PREF_RAW_DATA_LOG_FORMAT.equals(key)
+                    || UsbGpsProviderService.PREF_TRACK_FILE_DIR.equals(key)
+                    || UsbGpsProviderService.PREF_TRACK_FILE_PREFIX.equals(key)
+                    );
+        }
+
+        public void updateSummaries() {
+            final boolean enabled;
+            final String format;
+            int summaryResId;
+
+            mRawLogFormatPref.setSummary(mRawLogFormatPref.getEntry());
+
+            enabled = mEnableLogPref.isChecked();
+            format = mRawLogFormatPref.getValue();
+
+            if (!enabled) {
+                summaryResId = R.string.pref_recording_is_turned_off;
+            }else {
+                if (PREF_LOG_FORMAT_VALUE_RAW.equals(format)) {
+                    summaryResId = R.string.pref_recording_raw;
+                }else if (PREF_LOG_FORMAT_VALUE_NMEA.equals(format)) {
+                    summaryResId = R.string.pref_recording_nmea;
+                }else {
+                    throw new IllegalStateException();
+                }
+            }
+            mSettingsPref.setSummary(summaryResId);
+
+        }
+
+        public static DataLoggerConfiguration readConf(SharedPreferences prefs) {
+            final DataLoggerConfiguration mConf;
+
+            final String format, storageDir, filePrefix;
+
+            mConf = new DataLoggerConfiguration();
+
+            if (prefs.contains(UsbGpsProviderService.PREF_LOG_RAW_DATA)) {
+                final boolean enabled;
+                enabled = prefs.getBoolean(UsbGpsProviderService.PREF_LOG_RAW_DATA, true);
+                mConf.setEnabled(enabled);
+            }
+
+            format = prefs.getString(UsbGpsProviderService.PREF_RAW_DATA_LOG_FORMAT, null);
+            if (format != null) mConf.setFormat(Format.valueOfPrefsEntry(format));
+
+            storageDir = prefs.getString(UsbGpsProviderService.PREF_TRACK_FILE_DIR, null);
+            if (!TextUtils.isEmpty(storageDir)) mConf.setStorageDir(storageDir);
+
+            filePrefix = prefs.getString(UsbGpsProviderService.PREF_TRACK_FILE_PREFIX, null);
+            if (filePrefix != null) mConf.setFilePrefix(filePrefix);
+
+            return mConf;
+        }
+
+        public static void setDefaultValues(Context context, boolean force) {
+            final SharedPreferences prefs;
+            final DataLoggerConfiguration defaultConf;
+
+            prefs = PreferenceManager.getDefaultSharedPreferences(context);
+            if (prefs.contains(UsbGpsProviderService.PREF_LOG_RAW_DATA) && !force) {
+                return;
+            }
+
+            defaultConf = new DataLoggerConfiguration();
+
+            prefs.edit()
+                .putBoolean(UsbGpsProviderService.PREF_LOG_RAW_DATA, defaultConf.isEnabled())
+                .putString(UsbGpsProviderService.PREF_RAW_DATA_LOG_FORMAT, defaultConf.getFormat().getPrefsEntryValue())
+                .putString(UsbGpsProviderService.PREF_TRACK_FILE_DIR, defaultConf.getStorageDir())
+                .putString(UsbGpsProviderService.PREF_TRACK_FILE_PREFIX, defaultConf.getFilePrefix())
+                .apply();
+
         }
 
     }

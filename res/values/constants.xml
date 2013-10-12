@@ -28,7 +28,6 @@
     <string name="pref_force_enable_provider_key">forceEnableProvider</string>
     <string name="pref_mock_gps_name_key">mockGpsName</string>
     <string name="pref_connection_retries_key">connectionRetries</string>
-    <string name="pref_recording_key">trackRecording</string>
     <string name="pref_trackfile_directory_key">trackFileDirectory</string>
     <string name="pref_trackfile_prefix_key">trackFilePrefix</string>
     <string name="pref_gps_device_key">usbDevice</string>
@@ -48,12 +47,9 @@
     <string name="pref_sirf_enable_static_navigation_key">enableStaticNavigation</string>
 
     <string name="defaultConnectionRetries">5</string>
-    <string name="defaultTrackFileDirectory">/sdcard/nmea</string>
-    <string name="defaultTrackFilePrefix">usbnmeatrack</string>
+    <string name="defaultTrackFileDirectory">/sdcard/ExternalGPS</string>
+    <string name="defaultTrackFilePrefix">track</string>
     <string name="defaultMockGpsName">usb_gps</string>
-    <string name="defaultGpsDevice">/dev/ttyUSB0</string>
-    <string name="defaultGpsDeviceSpeed">4800</string>
-    <string name="autoGpsDeviceSpeed">auto</string>
     
     
     <string name="sirf_nmea_gga_on">PSRF103,00,00,01,01</string>
@@ -122,8 +118,12 @@
 		<item>M</item>
 		<item>S</item>
 	</string-array>
-	<string-array name="pref_usb_serial_stop_bits_entries">
+	<string-array name="pref_usb_serial_stop_bits_values">
 		<item>1</item>
 		<item>2</item>
 	</string-array>
+	<string-array name="pref_raw_data_log_format_values">
+        <item>raw</item>
+        <item>nmea</item>
+    </string-array>
 </resources>

@@ -48,9 +48,19 @@ static bool parse_gst(const uint8_t *msg, size_t msg_size,
 static unsigned split_nmea_str(const uint8_t *msg, size_t msg_size,
     const char **fields, int fields_size, char *buf);
 static parse_error_t parse_nmea_fix_time(const char *hhmmss_mss, struct nmea_fix_time_t *dst);
-static parse_error_t parse_nmea_latitude(const char *deg_str, const char *ns, double *dst);
-static parse_error_t parse_nmea_longitude(const char *deg_str, const char *ew, double *dst);
-static parse_error_t parse_float(const char *str, float *dst);
+static bool parse_nmea_latitude(const char * __restrict deg_str,
+    const char * __restrict ns,
+    double * __restrict dst,
+    bool * dst_is_defined);
+static bool parse_nmea_longitude(const char * __restrict deg_str,
+    const char * __restrict ew,
+    double * __restrict dst,
+    bool * __restrict dst_is_defined
+    );
+static bool parse_float(const char * __restrict str,
+    float * __restrict dst,
+    bool * __restrict dst_is_defined
+    );
 
 static void open_nmea_fix(struct nmea_fix_t *fix, struct nmea_fix_time_t time);
 static inline bool is_same_fix_time(struct nmea_fix_time_t t1, struct nmea_fix_time_t t2);
@@ -260,7 +270,6 @@ static bool parse_gga(const uint8_t *msg, size_t msg_size,
     struct nmea_gpgga_t *dst, struct gps_msg_status_t *status)
 {
   unsigned fields_nb;
-  parse_error_t field_err;
   struct nmea_gpgga_t gpgga;
   const char *fields[15];
   char buf[NMEA_MAX];
@@ -279,37 +288,20 @@ static bool parse_gga(const uint8_t *msg, size_t msg_size,
     return set_nmea_error(status, msg, msg_size, "Invalid NMEA fix time");
 
   /* Fields 2,3 latitude */
-  field_err = parse_nmea_latitude(fields[2], fields[3], &gpgga.latitude);
-  if (field_err == FIELD_INVALID) {
+  if (!parse_nmea_latitude(fields[2], fields[3], &gpgga.latitude, &gpgga.has_latitude))
     return set_nmea_error(status, msg, msg_size,
-        "Invalid latitude");
-  }else if (field_err == FIELD_UNDEFINED) {
-    set_nmea_error(status, msg, msg_size,
-        "latitude not defined");
-    status->is_valid = true;
-    return status->is_valid;
-  }else {
-    assert(field_err == FIELD_VALID);
-  }
+        "Invalid latitude '%s:%s'", fields[2], fields[3]);
 
   /* Fields 4,5 longitude */
-  field_err = parse_nmea_longitude(fields[4], fields[5], &gpgga.longitude);
-  if (field_err == FIELD_INVALID) {
+  if (!parse_nmea_longitude(fields[4], fields[5], &gpgga.longitude, &gpgga.has_longitude))
     return set_nmea_error(status, msg, msg_size,
-        "Invalid longitude");
-  }else if (field_err == FIELD_UNDEFINED) {
-    set_nmea_error(status, msg, msg_size,
-        "longitude not defined");
-    status->is_valid = true;
-    return status->is_valid;
-  }else {
-    assert(field_err == FIELD_VALID);
-  }
+        "Invalid longitude '%s:%s'", fields[4], fields[5]);
 
   /* Field 6 fix quality */
-  if (fields[6][0] == '\0')
-    gpgga.fix_quality = 0;
-  else {
+  if (fields[6][0] == '\0') {
+    return set_nmea_error(status, msg, msg_size,
+        "Undefined fix quality");
+  }else {
     char *endptr;
     unsigned long fixq;
     errno = 0;
@@ -324,9 +316,7 @@ static bool parse_gga(const uint8_t *msg, size_t msg_size,
   }
 
   /* Field 7. Number of satellites being tracked */
-  if (fields[7][0] == '\0') {
-    gpgga.sattelites_nb = -1;
-  }else {
+  if ( (gpgga.has_sattelites_nb = (fields[7][0] != '\0'))) {
     unsigned long sat_nb;
     char *endptr;
     errno = 0;
@@ -341,14 +331,11 @@ static bool parse_gga(const uint8_t *msg, size_t msg_size,
   }
 
   /* Field 8. HDOP */
-  if (parse_float(fields[8], &gpgga.hdop) == FIELD_INVALID) {
-    return set_nmea_error(status, msg, msg_size, "Invalid HDOP");
-  }
+  if (!parse_float(fields[8], &gpgga.hdop, &gpgga.has_hdop))
+      return set_nmea_error(status, msg, msg_size, "Invalid HDOP");
 
   /* Field 9.  Altitude above mean sea level */
-  if (fields[9][0] == '\0') {
-    gpgga.altitude = NAN;
-  }else {
+  if ( (gpgga.has_altitude = (fields[9][0] != '\0'))) {
     char *endptr;
     errno = 0;
     gpgga.altitude = strtod(fields[9], &endptr);
@@ -361,9 +348,7 @@ static bool parse_gga(const uint8_t *msg, size_t msg_size,
   }
 
   /* Field 11. Geoid height */
-  if (fields[11][0] == '\0') {
-    gpgga.geoid_height = FP_NAN;
-  }else {
+  if ( (gpgga.has_geoid_height = (fields[11][0] != '\0'))) {
     char *endptr;
     errno = 0;
     gpgga.geoid_height = strtod(fields[11], &endptr);
@@ -385,7 +370,6 @@ static bool parse_rmc(const uint8_t *msg, size_t msg_size,
     struct nmea_gprmc_t *dst, struct gps_msg_status_t *status)
 {
   unsigned fields_nb;
-  parse_error_t field_err;
   struct nmea_gprmc_t gprmc;
   const char *fields[12];
   char buf[NMEA_MAX];
@@ -404,48 +388,27 @@ static bool parse_rmc(const uint8_t *msg, size_t msg_size,
   gprmc.status_active = fields[2][0] == 'A';
 
   /* Fields 3,4 latitude */
-  field_err = parse_nmea_latitude(fields[3], fields[4], &gprmc.latitude);
-  if (field_err == FIELD_INVALID) {
+  if (!parse_nmea_latitude(fields[3], fields[4], &gprmc.latitude, &gprmc.has_latitude))
     return set_nmea_error(status, msg, msg_size,
         "Invalid latitude");
-  }else if (field_err == FIELD_UNDEFINED) {
-    set_nmea_error(status, msg, msg_size,
-        "latitude not defined");
-    status->is_valid = true;
-    return status->is_valid;
-  }else {
-    assert(field_err == FIELD_VALID);
-  }
 
   /* Fields 5,6 longitude */
-  field_err = parse_nmea_longitude(fields[5], fields[6], &gprmc.longitude);
-  if (field_err == FIELD_INVALID) {
+  if (!parse_nmea_longitude(fields[5], fields[6], &gprmc.longitude, &gprmc.has_longitude))
     return set_nmea_error(status, msg, msg_size,
         "Invalid longitude");
-  }else if (field_err == FIELD_UNDEFINED) {
-    set_nmea_error(status, msg, msg_size,
-        "longitude not defined");
-    status->is_valid = true;
-    return status->is_valid;
-  }else {
-    assert(field_err == FIELD_VALID);
-  }
 
   /* Field 7. Speed over the ground  */
-  if (parse_float(fields[7], &gprmc.speed) == FIELD_INVALID) {
+  if (!parse_float(fields[7], &gprmc.speed, &gprmc.has_speed))
     return set_nmea_error(status, msg, msg_size, "Invalid speed");
-  }else {
+  else
     gprmc.speed *= KNOTS_TO_MPS;
-  }
 
   /* Field 8 course */
-  if (parse_float(fields[8], &gprmc.course) == FIELD_INVALID)
+  if (!parse_float(fields[8], &gprmc.course, &gprmc.has_course))
     return set_nmea_error(status, msg, msg_size, "Invalid course");
 
   /* Field 9. Date */
-  if (fields[9][0] == '\0')
-    gprmc.ddmmyy = 0;
-  else {
+  if ( (gprmc.has_ddmmyy = (fields[9][0] != '\0'))) {
     char *endptr;
     unsigned long ddmmyy;
     errno = 0;
@@ -468,7 +431,6 @@ static bool parse_gll(const uint8_t *msg, size_t msg_size,
     struct nmea_gpgll_t *dst, struct gps_msg_status_t *status)
 {
   unsigned fields_nb;
-  parse_error_t field_err;
   struct nmea_gpgll_t gpgll;
   const char *fields[6];
   char buf[NMEA_MAX];
@@ -483,32 +445,14 @@ static bool parse_gll(const uint8_t *msg, size_t msg_size,
   }
 
   /* Fields 1,2 latitude */
-  field_err = parse_nmea_latitude(fields[1], fields[2], &gpgll.latitude);
-  if (field_err == FIELD_INVALID) {
+  if (!parse_nmea_latitude(fields[1], fields[2], &gpgll.latitude, &gpgll.has_latitude))
     return set_nmea_error(status, msg, msg_size,
         "Invalid latitude");
-  }else if (field_err == FIELD_UNDEFINED) {
-    set_nmea_error(status, msg, msg_size,
-        "latitude not defined");
-    status->is_valid = true;
-    return status->is_valid;
-  }else {
-    assert(field_err == FIELD_VALID);
-  }
 
   /* Fields 3,4 longitude */
-  field_err = parse_nmea_longitude(fields[3], fields[4], &gpgll.longitude);
-  if (field_err == FIELD_INVALID) {
+  if (!parse_nmea_longitude(fields[3], fields[4], &gpgll.longitude, &gpgll.has_longitude))
     return set_nmea_error(status, msg, msg_size,
         "Invalid longitude");
-  }else if (field_err == FIELD_UNDEFINED) {
-    set_nmea_error(status, msg, msg_size,
-        "longitude not defined");
-    status->is_valid = true;
-    return status->is_valid;
-  }else {
-    assert(field_err == FIELD_VALID);
-  }
 
   if (fields_nb < 6) {
     gpgll.status = true;
@@ -537,19 +481,19 @@ static bool parse_vtg(const uint8_t *msg, size_t msg_size,
     return set_nmea_error(status, msg, msg_size, "Invalid field count %u", fields_nb);
 
   /* Field 1, 2. True course made good over ground */
-  if (parse_float(fields[1], &gpvtg.course_true) == FIELD_INVALID)
+  if (!parse_float(fields[1], &gpvtg.course_true, &gpvtg.has_course_true))
     return set_nmea_error(status, msg, msg_size, "Invalid true course");
 
   /* Field 3, 4. Magnetic course made good over ground */
-  if (parse_float(fields[3], &gpvtg.course_magn) == FIELD_INVALID)
+  if (!parse_float(fields[3], &gpvtg.course_magn, &gpvtg.has_course_magn))
     return set_nmea_error(status, msg, msg_size, "Invalid magnetic course");
 
   /* Field 5, 6. Speed, Knots*/
-  if (parse_float(fields[5], &gpvtg.speed_knots) == FIELD_INVALID)
+  if (!parse_float(fields[5], &gpvtg.speed_knots, &gpvtg.has_speed_knots))
     return set_nmea_error(status, msg, msg_size, "Invalid ground speed (knots)");
 
   /* Field 7, 8. Speed, kmph*/
-  if (parse_float(fields[7], &gpvtg.speed_kmph) == FIELD_INVALID)
+  if (!parse_float(fields[7], &gpvtg.speed_kmph, &gpvtg.has_speed_kmph))
     return set_nmea_error(status, msg, msg_size, "Invalid ground speed (kmph)");
 
   /* Field 9. Mode indicator */
@@ -620,15 +564,15 @@ static bool parse_gsa(const uint8_t *msg, size_t msg_size,
   }
 
   /* Field 15. PDOP */
-  if (parse_float(fields[15], &gpgsa.pdop) == FIELD_INVALID)
+  if (!parse_float(fields[15], &gpgsa.pdop, &gpgsa.has_pdop))
     return set_nmea_error(status, msg, msg_size, "Invalid PDOP");
 
   /* Field 16. HDOP */
-  if (parse_float(fields[16], &gpgsa.hdop) == FIELD_INVALID)
+  if (!parse_float(fields[16], &gpgsa.hdop, &gpgsa.has_hdop))
     return set_nmea_error(status, msg, msg_size, "Invalid HDOP");
 
   /* Field 17. VDOP */
-  if (parse_float(fields[17], &gpgsa.vdop) == FIELD_INVALID)
+  if (!parse_float(fields[17], &gpgsa.vdop, &gpgsa.has_vdop))
     return set_nmea_error(status, msg, msg_size, "Invalid VDOP");
 
   *dst = gpgsa;
@@ -771,31 +715,31 @@ static bool parse_gst(const uint8_t *msg, size_t msg_size,
     return set_nmea_error(status, msg, msg_size, "Invalid NMEA fix time");
 
   /* Field 2. RMS deviation */
-  if (parse_float(fields[2], &gpgst.range_rms) == FIELD_INVALID)
+  if (!parse_float(fields[2], &gpgst.range_rms, &gpgst.has_range_rms))
     return set_nmea_error(status, msg, msg_size, "Invalid RMS deviation");
 
   /* Field 3. Semi-major deviation */
-  if (parse_float(fields[3], &gpgst.std_major) == FIELD_INVALID)
+  if (!parse_float(fields[3], &gpgst.std_major, &gpgst.has_std_major))
     return set_nmea_error(status, msg, msg_size, "Invalid Semi-major deviation");
 
   /* Field 4. Semi-minor deviation */
-  if (parse_float(fields[4], &gpgst.std_minor) == FIELD_INVALID)
+  if (!parse_float(fields[4], &gpgst.std_minor, &gpgst.has_std_minor))
     return set_nmea_error(status, msg, msg_size, "Invalid Semi-minor deviation");
 
   /* Field 5. Semi-major orientation */
-  if (parse_float(fields[5], &gpgst.orient) == FIELD_INVALID)
+  if (!parse_float(fields[5], &gpgst.orient, &gpgst.has_orient))
     return set_nmea_error(status, msg, msg_size, "Invalid Semi-major orientation");
 
   /* Field 6. Latitude error deviation */
-  if (parse_float(fields[6], &gpgst.std_lat) == FIELD_INVALID)
+  if (!parse_float(fields[6], &gpgst.std_lat, &gpgst.has_std_lat))
     return set_nmea_error(status, msg, msg_size, "Invalid Latitude error");
 
   /* Field 7. Longitude error deviation */
-  if (parse_float(fields[7], &gpgst.std_lon) == FIELD_INVALID)
+  if (parse_float(fields[7], &gpgst.std_lon, &gpgst.has_std_lon))
     return set_nmea_error(status, msg, msg_size, "Invalid Longitude error");
 
   /* Field 8. Altitude error deviation */
-  if (parse_float(fields[8], &gpgst.std_alt) == FIELD_INVALID)
+  if (!parse_float(fields[8], &gpgst.std_alt, &gpgst.has_std_alt))
     return set_nmea_error(status, msg, msg_size, "Invalid altitude error");
 
   *dst = gpgst;
@@ -935,11 +879,16 @@ static void merge_full_time(struct nmea_parser_t *ctx)
 static bool compose_location(const struct nmea_parser_t *ctx, struct location_t *dst)
 {
   const struct nmea_fix_t *fix;
+  bool  min_gga, min_rmc, min_gll;
   bool is_valid;
   struct tm time_full;
 
   fix = &ctx->fix;
-  is_valid = fix->gpgga_active || fix->gprmc_active;
+  min_gga = fix->gpgga_active && fix->gpgga.has_latitude && fix->gpgga.has_longitude;
+  min_rmc = fix->gprmc_active && fix->gprmc.has_latitude && fix->gprmc.has_longitude;
+  min_gll = fix->gpgll_active && fix->gpgll.has_latitude && fix->gpgll.has_longitude;
+
+  is_valid = min_gga || min_rmc || min_gll;
   if (fix->gpgga_active)
     is_valid &= fix->gpgga.fix_quality != 0;
   if (fix->gprmc_active)
@@ -955,20 +904,20 @@ static bool compose_location(const struct nmea_parser_t *ctx, struct location_t 
   dst->time = 1000ll * (long long)timegm64(&time_full) + ctx->fix.fix_time.mss;
 
   // Latitude, longitude
-  if (fix->gpgga_active) {
+  if (min_gga) {
     dst->latitude = fix->gpgga.latitude;
     dst->longitude = fix->gpgga.longitude;
-  }else if(fix->gprmc_active) {
+  }else if(min_rmc) {
     dst->latitude = fix->gprmc.latitude;
     dst->longitude = fix->gprmc.longitude;
   }else {
-    assert(fix->gpgll_active);
+    assert(min_gll);
     dst->latitude = fix->gpgll.latitude;
     dst->longitude = fix->gpgll.longitude;
   }
 
   // Altitude
-  if (fix->gpgga_active && !isnanf(fix->gpgga.altitude)) {
+  if (min_gga && fix->gpgga.has_altitude) {
     dst->has_altitude = true;
     dst->altitude = fix->gpgga.altitude;
   }else {
@@ -977,7 +926,7 @@ static bool compose_location(const struct nmea_parser_t *ctx, struct location_t 
   }
 
   // Satellites
-  if (fix->gpgga_active && fix->gpgga.sattelites_nb > 0) {
+  if (min_gga && fix->gpgga.has_sattelites_nb) {
     dst->satellites = fix->gpgga.sattelites_nb;
   }else if (ctx->gpgsa.is_valid) {
     unsigned i;
@@ -991,12 +940,12 @@ static bool compose_location(const struct nmea_parser_t *ctx, struct location_t 
   }
 
   // Bearing
-  if (fix->gprmc_active && !isnanf(fix->gprmc.course)) {
+  if (fix->gprmc_active && fix->gprmc.has_course) {
     dst->has_bearing = true;
     dst->bearing = fix->gprmc.course;
   }else if (ctx->gpvtg.is_valid
       && (ctx->gpvtg.fix_mode != 'N')
-      && !isnanf(ctx->gpvtg.course_true)) {
+      && ctx->gpvtg.has_course_true) {
     dst->has_bearing = true;
     dst->bearing = ctx->gpvtg.course_true;
   }else {
@@ -1005,12 +954,12 @@ static bool compose_location(const struct nmea_parser_t *ctx, struct location_t 
   }
 
   // Speed
-  if (fix->gprmc_active && !isnanf(fix->gprmc.speed)) {
+  if (fix->gprmc_active && fix->gprmc.has_speed) {
     dst->has_speed = true;
     dst->speed = fix->gprmc.speed;
   }else if (ctx->gpvtg.is_valid
       && (ctx->gpvtg.fix_mode != 'N')
-      && !isnanf(ctx->gpvtg.speed_kmph)) {
+      && ctx->gpvtg.has_speed_kmph) {
     dst->has_speed = true;
     dst->speed = ctx->gpvtg.speed_kmph * KMPH_TO_MPS;
   }else {
@@ -1022,10 +971,10 @@ static bool compose_location(const struct nmea_parser_t *ctx, struct location_t 
   dst->has_accuracy = false;
   dst->accuracy = 0;
   if (fix->gpgst_active) {
-    if (!isnanf(fix->gpgst.std_lat) && !isnanf(fix->gpgst.std_lon)) {
+    if (fix->gpgst.has_std_lat && fix->gpgst.has_std_lon) {
       dst->has_accuracy = true;
       dst->accuracy = hypotf(fix->gpgst.std_lat, fix->gpgst.std_lon);
-    }else if (!isnanf(fix->gpgst.range_rms)) {
+    }else if (fix->gpgst.has_range_rms) {
       dst->has_accuracy = true;
       dst->accuracy = fix->gpgst.range_rms;
     }else {
@@ -1097,13 +1046,20 @@ static parse_error_t parse_nmea_fix_time(const char *hhmmss_mss, struct nmea_fix
   return FIELD_VALID;
 }
 
-static inline parse_error_t parse_nmea_degrees(const char *deg_str, bool reverse_direction, double *dst)
+static inline bool parse_nmea_degrees(const char * __restrict deg_str,
+    bool reverse_direction,
+    double * __restrict dst,
+    bool * __restrict dst_is_defined)
 {
   char *endptr;
   double res, degrees, minutes;
 
-  if (deg_str[0] == '\0')
-    return FIELD_UNDEFINED;
+  if (deg_str[0] == '\0') {
+    *dst_is_defined = false;
+    return true;
+  }else {
+    *dst_is_defined = true;
+  }
 
   errno = 0;
   res = strtod(deg_str, &endptr);
@@ -1111,52 +1067,60 @@ static inline parse_error_t parse_nmea_degrees(const char *deg_str, bool reverse
       || (errno != 0 && res == 0)
       || (*endptr != '\0')
       )
-    return FIELD_INVALID;
+    return false;
 
   minutes = 100.0 * modf(res / 100.0, &degrees);
 
   *dst = (reverse_direction ? -1.0 : 1.0) * (degrees + minutes / 60.0);
 
-  return FIELD_VALID;
+  return true;
 }
 
-static parse_error_t parse_nmea_latitude(const char *deg_str, const char *ns, double *dst)
+static bool parse_nmea_latitude(const char * __restrict deg_str,
+    const char * __restrict ns,
+    double * __restrict dst,
+    bool * dst_is_defined)
 {
-  parse_error_t err = parse_nmea_degrees(deg_str, *ns == 'S', dst);
-  if (err != FIELD_VALID)
-    return err;
-  if (*dst < -90.0 || *dst > 90.0)
-    return FIELD_INVALID;
-  return FIELD_VALID;
+  if (!parse_nmea_degrees(deg_str, *ns == 'S', dst, dst_is_defined))
+    return false;
+  if (!*dst_is_defined)
+    return true;
+  return ((*dst >= -90.0) && (*dst <= 90.0));
 }
 
-static parse_error_t parse_nmea_longitude(const char *deg_str, const char *ew, double *dst)
+static bool parse_nmea_longitude(const char * __restrict deg_str,
+    const char * __restrict ew,
+    double * __restrict dst,
+    bool * __restrict dst_is_defined
+    )
 {
-  parse_error_t err = parse_nmea_degrees(deg_str, *ew == 'W', dst);
-  if (err != FIELD_VALID)
-    return err;
-  if (*dst < -180.0 || *dst > 180.0)
-    return FIELD_INVALID;
-  return FIELD_VALID;
+  if (!parse_nmea_degrees(deg_str, *ew == 'W', dst, dst_is_defined))
+    return false;
+  if (!*dst_is_defined)
+    return true;
+  return ((*dst >= -180.0) && (*dst <= 180.0));
 }
 
-static parse_error_t parse_float(const char *str, float *dst)
+static bool parse_float(const char * __restrict str,
+    float * __restrict dst,
+    bool * __restrict dst_is_defined
+    )
 {
   char *endptr;
   errno = 0;
   if (*str == '\0') {
-    *dst = FP_NAN;
-    return FIELD_UNDEFINED;
+    *dst_is_defined = false;
   }else {
+    *dst_is_defined = true;
     *dst = strtof(str, &endptr);
     if ((errno == ERANGE && (*dst == HUGE_VALF || *dst == -HUGE_VALF))
         || (errno != 0 && *dst == 0)
         || (*endptr != '\0')
        ) {
-      return FIELD_INVALID;
+      return false;
     }
   }
-  return FIELD_VALID;
+  return true;
 }
 
 static bool set_nmea_error(struct gps_msg_status_t *status,
