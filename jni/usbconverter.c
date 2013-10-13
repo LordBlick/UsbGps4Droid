@@ -288,7 +288,6 @@ static void read_loop(JNIEnv *env, jobject this, struct native_ctx_t *reader)
     ctrl.data = &stream->rx_buf[stream->rxbuf_pos];
     ctrl.timeout = READ_TIMEOUT_MS;
 
-    usleep(20000); /* trying not to read byte by byte */
     rcvd = ioctl(stream->fd, USBDEVFS_BULK, &ctrl);
     last_event_errno = errno;
     clock_gettime(CLOCK_MONOTONIC, &stream->last_event_ts);
@@ -320,6 +319,7 @@ static void handle_timedout(JNIEnv *env, jobject this, struct native_ctx_t *read
   put_nmea_timedout(&reader->nmea, &status);
   if (status.location_changed)
     report_location(env, this, &status.location);
+  datalogger_flush(&reader->datalogger);
 }
 
 static void handle_rcvd(JNIEnv *env, jobject this,

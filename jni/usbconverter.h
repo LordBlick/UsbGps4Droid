@@ -21,6 +21,8 @@
 #define LOOKS_LIKE_TRUNCATED_MSG -1
 
 #define DATA_LOGGER_BUFFER_SIZE (512*1024)
+#define DATA_LOGGER_WATERMARK (DATA_LOGGER_BUFFER_SIZE-8*1024)
+#define DATA_LOGGER_FLUSH_INTERVAL_SEC 3*60
 
 struct location_t {
   long long time;
@@ -249,7 +251,9 @@ struct gps_msg_metadata_t {
 
 struct datalogger_t {
   pthread_mutex_t mtx;
+  size_t buffer_pos;
   bool enabled;
+  struct timespec last_flush_ts;
   enum {
     DATALOGGER_FORMAT_RAW = 1,
     DATALOGGER_FORMAT_NMEA = 2
@@ -258,7 +262,6 @@ struct datalogger_t {
   char logs_dir[PATH_MAX];
   char log_prefix[80];
 
-  FILE *cur_file;
   char cur_file_name[NAME_MAX+PATH_MAX];
 
   char buffer[DATA_LOGGER_BUFFER_SIZE];
@@ -304,6 +307,7 @@ void datalogger_log_raw_data(struct datalogger_t * __restrict logger,
 void datalogger_log_msg(struct datalogger_t * __restrict logger,
     const uint8_t * __restrict msg,
     const struct gps_msg_metadata_t * __restrict metadata);
+void datalogger_flush(struct datalogger_t *logger);
 void datalogger_stop(struct datalogger_t *logger);
 void datalogger_destroy(struct datalogger_t *logger);
 

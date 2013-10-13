@@ -735,7 +735,7 @@ static bool parse_gst(const uint8_t *msg, size_t msg_size,
     return set_nmea_error(status, msg, msg_size, "Invalid Latitude error");
 
   /* Field 7. Longitude error deviation */
-  if (parse_float(fields[7], &gpgst.std_lon, &gpgst.has_std_lon))
+  if (!parse_float(fields[7], &gpgst.std_lon, &gpgst.has_std_lon))
     return set_nmea_error(status, msg, msg_size, "Invalid Longitude error");
 
   /* Field 8. Altitude error deviation */
