@@ -13,6 +13,7 @@
 #include <android/log.h>
 
 #include "usbconverter.h"
+#include "datalogger.h"
 
 #define TAG "nativeDataLogger"
 #ifdef ENABLE_LOG
@@ -21,7 +22,6 @@
 #define LOGV(...)  do {} while (0)
 #endif
 #define LOGI(x...) __android_log_print(ANDROID_LOG_INFO,TAG,x)
-
 
 static void logfile_write_unlocked(struct datalogger_t * __restrict logger, const uint8_t * __restrict data, size_t size);
 static bool logfile_flush_unlocked(struct datalogger_t *logger);

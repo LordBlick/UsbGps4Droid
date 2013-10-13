@@ -16,6 +16,7 @@
 #include <asm/byteorder.h>
 
 #include "usbconverter.h"
+#include "datalogger.h"
 
 #define TAG "nativeUsbConverter"
 #ifdef ENABLE_LOG
