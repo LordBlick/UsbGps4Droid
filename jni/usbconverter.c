@@ -12,43 +12,38 @@
 #include <jni.h>
 #include <android/log.h>
 
-#include <linux/usbdevice_fs.h>
-#include <asm/byteorder.h>
-
 #include "usbconverter.h"
 #include "datalogger.h"
+#include "usbreader.h"
 
-#define TAG "nativeUsbConverter"
+#define TAG "NativeUsbConverter"
 #ifdef ENABLE_LOG
 #define LOGV(x...) __android_log_print(ANDROID_LOG_VERBOSE,TAG,x)
 #else
 #define LOGV(...)  do {} while (0)
 #endif
 
-#define MIN(a, b) ((a)<(b)?(a):(b))
-
-#define MAX_BUF_SIZE 8192
-#define READ_TIMEOUT_MS 1100
-
 #define EXCEPTION_ILLEGAL_ARGUMENT "java/lang/IllegalArgumentException"
 #define EXCEPTION_ILLEGAL_STATE "java/lang/IllegalStateException"
 #define EXCEPTION_NULL_POINTER  "java/lang/NullPointerException"
+
+static const struct timespec READ_TIMEOUT = {
+  1, 500l*1e6
+};
 
 static jfieldID m_object_field;
 static jmethodID method_report_location;
 static jmethodID method_on_gps_message_received;
 
 struct usb_read_stream_t {
-  int fd;
-  int endpoint;
-  int max_pkt_size;
+  pthread_t read_thread;
+  struct usb_reader_thread_ctx_t read_thread_ctx;
 
   struct timespec last_event_ts;
 
   int rxbuf_pos;
-  uint8_t rx_buf[MAX_BUF_SIZE];
-
   jobject rx_buf_direct;
+  uint8_t rx_buf[USB_READER_BUF_SIZE];
 };
 
 struct native_ctx_t {
@@ -124,7 +119,9 @@ static void native_read_loop(JNIEnv *env, jobject this,
   static jmethodID method_get_istream_max_pkt_size;
   static jmethodID method_get_istream_ep_addr;
   jobject direct_buf;
+  JavaVM *jvm;
   struct native_ctx_t *reader;
+  int fd, max_pkt_size, endpoint;
 
   reader = get_ctx(env, this);
   if (reader == NULL)
@@ -170,22 +167,31 @@ static void native_read_loop(JNIEnv *env, jobject this,
     return;
  reader->stream.rx_buf_direct = (*env)->NewGlobalRef(env, direct_buf);
 
- reader->stream.fd = (*env)->CallIntMethod(env, j_input_stream, method_get_istream_fd);
-  if (reader->stream.fd < 0)
-    return;
+ if ( (*env)->GetJavaVM(env, &jvm) < 0) {
+   LOGV("GetJavaVM() failure");
+   return;
+ }
+ if (jvm == NULL) {
+   LOGV("GetJavaVM(): JavaVM is NULL");
+   return;
+ }
 
-  reader->stream.max_pkt_size = (*env)->CallIntMethod(env, j_input_stream, method_get_istream_max_pkt_size);
-  if (reader->stream.max_pkt_size <= 0)
-    return;
+ fd = (*env)->CallIntMethod(env, j_input_stream, method_get_istream_fd);
+ if (fd < 0)
+   return;
 
-  reader->stream.endpoint = (*env)->CallIntMethod(env, j_input_stream, method_get_istream_ep_addr);
+ max_pkt_size = (*env)->CallIntMethod(env, j_input_stream, method_get_istream_max_pkt_size);
+ if (max_pkt_size <= 0)
+   return;
 
-  LOGV("istream_fd: %i, endpoint: 0x%x, max_pkt_size: %i", reader->stream.fd,
-      reader->stream.endpoint, reader->stream.max_pkt_size);
+ endpoint = (*env)->CallIntMethod(env, j_input_stream, method_get_istream_ep_addr);
 
-  read_loop(env, this, reader);
+ usb_reader_init(&reader->stream.read_thread_ctx,
+     jvm, fd, endpoint, max_pkt_size);
 
-  (*env)->DeleteGlobalRef(env, reader->stream.rx_buf_direct);
+ read_loop(env, this, reader);
+
+ (*env)->DeleteGlobalRef(env, reader->stream.rx_buf_direct);
 }
 
 static void native_get_stats(JNIEnv *env, jobject this, jobject dst)
@@ -265,6 +271,7 @@ static void native_datalogger_stop(JNIEnv *env, jobject this)
 static void read_loop(JNIEnv *env, jobject this, struct native_ctx_t *reader)
 {
   int rcvd;
+  int last_errno;
   struct usb_read_stream_t *stream;
 
   reset_nmea_parser(&reader->nmea);
@@ -279,30 +286,29 @@ static void read_loop(JNIEnv *env, jobject this, struct native_ctx_t *reader)
   stream->last_event_ts.tv_sec = 0;
   stream->last_event_ts.tv_nsec = 0;
 
+  if (pthread_create(&stream->read_thread, NULL, usb_reader_thread,
+        &stream->read_thread_ctx) != 0) {
+    // XXX
+    return;
+  }
+
   for (;;) {
-    int last_event_errno;
-    struct usbdevfs_bulktransfer ctrl;
-
-    memset(&ctrl, 0, sizeof(ctrl));
-    ctrl.ep = stream->endpoint;
-    ctrl.len = MIN(stream->max_pkt_size, (int)sizeof(stream->rx_buf)-stream->rxbuf_pos);
-    ctrl.data = &stream->rx_buf[stream->rxbuf_pos];
-    ctrl.timeout = READ_TIMEOUT_MS;
-
-    rcvd = ioctl(stream->fd, USBDEVFS_BULK, &ctrl);
-    last_event_errno = errno;
+    rcvd = usb_read(&stream->read_thread_ctx,
+        &stream->rx_buf[stream->rxbuf_pos],
+        sizeof(stream->rx_buf)-stream->rxbuf_pos,
+        &READ_TIMEOUT);
+    last_errno = errno;
     clock_gettime(CLOCK_MONOTONIC, &stream->last_event_ts);
     if (rcvd < 0) {
-      if (last_event_errno == ETIMEDOUT) {
+      if (last_errno == ETIMEDOUT) {
         LOGV("usb read timeout");
         handle_timedout(env, this, reader);
         continue;
       }else {
-        LOGV("read_loop(): rcvd %i, error: %s", rcvd, strerror(errno));
         break;
       }
     }else if (rcvd == 0) {
-      // XXX: EOF
+      LOGV("usb_read() rcvd 0");
       continue;
     }else {
       datalogger_log_raw_data(&reader->datalogger, &stream->rx_buf[stream->rxbuf_pos], rcvd);
@@ -310,6 +316,8 @@ static void read_loop(JNIEnv *env, jobject this, struct native_ctx_t *reader)
       handle_rcvd(env, this, reader, (unsigned)rcvd);
     }
   }
+
+  pthread_join(stream->read_thread, NULL);
 
   datalogger_stop(&reader->datalogger);
 }

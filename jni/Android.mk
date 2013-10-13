@@ -12,6 +12,7 @@ LOCAL_SRC_FILES := \
         sirf.c \
         stats.c \
         ublox.c \
-        usbconverter.c
+        usbreader.c \
+        usbconverter.c \
 
 include $(BUILD_SHARED_LIBRARY)
