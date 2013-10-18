@@ -13,6 +13,7 @@ import android.location.Location;
 import android.location.LocationManager;
 import android.os.Bundle;
 import android.os.ConditionVariable;
+import android.support.v4.content.LocalBroadcastManager;
 import android.util.Log;
 
 import org.broeuschmeul.android.gps.usb.AutobaudTask;
@@ -36,6 +37,25 @@ public class UsbGpsConverter {
     private static final boolean DBG = BuildConfig.DEBUG & true;
     static final String TAG = UsbGpsConverter.class.getSimpleName();
 
+    public final static String ACTION_USB_ATTACHED =
+            "org.broeuschmeul.android.gps.usb.provider.UsbGpsConverter.ACTION_USB_ATTACHED";
+    public final static String ACTION_USB_DETACHED =
+            "org.broeuschmeul.android.gps.usb.provider.UsbGpsConverter.ACTION_USB_DETACHED";
+
+    public final static String ACTION_AUTOCONF_STARTED =
+            "org.broeuschmeul.android.gps.usb.provider.UsbGpsConverter.ACTION_AUTOCONF_STARTED";
+    public final static String ACTION_AUTOCONF_STOPPED =
+            "org.broeuschmeul.android.gps.usb.provider.UsbGpsConverter.ACTION_AUTOCONF_STOPPED";
+
+    public final static String ACTION_VALID_GPS_MESSAGE_RECEIVED =
+            "org.broeuschmeul.android.gps.usb.provider.UsbGpsConverter.ACTION_VALID_GPS_MESSAGE_RECEIVED";
+    public final static String ACTION_VALID_LOCATION_RECEIVED =
+            "org.broeuschmeul.android.gps.usb.provider.UsbGpsConverter.ACTION_VALID_LOCATION_RECEIVED";
+
+    public final static String EXTRA_DATA =
+            "org.broeuschmeul.android.gps.usb.provider.UsbGpsConverter.EXTRA_DATA";
+
+
     // Constants that indicate the current connection state
     public static enum TransportState {
         IDLE,
@@ -51,27 +71,9 @@ public class UsbGpsConverter {
 
     private final Context mContext;
     final UsbReceiver mUsbReceiver;
-    private Callbacks mCallbacks;
+    private final LocalBroadcastManager mBroadcastManager;
     private MockLocationProvider mLocationProvider;
 
-    public interface Callbacks {
-
-        public void onConnected();
-
-        public void onStopped();
-
-        public void onConnectionLost();
-
-    }
-
-    private static final Callbacks sDummyCallbacks = new Callbacks() {
-        @Override
-        public void onConnected() {}
-        @Override
-        public void onStopped() {}
-        @Override
-        public void onConnectionLost() {}
-    };
 
     public UsbGpsConverter(Context serviceContext) {
         this(serviceContext, new MockLocationProvider());
@@ -81,7 +83,7 @@ public class UsbGpsConverter {
         mContext = serviceContext;
         mLocationProvider = provider;
         mUsbReceiver = new UsbReceiver();
-        mCallbacks = sDummyCallbacks;
+        mBroadcastManager = LocalBroadcastManager.getInstance(mContext);
     }
 
     public void start() {
@@ -118,11 +120,6 @@ public class UsbGpsConverter {
 
     public void setDataLoggerConfiguration(DataLoggerConfiguration conf) {
         mUsbReceiver.setDataLoggerConfiguration(conf);
-    }
-
-    public void setCallbacks(Callbacks callbacks) {
-        if (callbacks == null) throw new IllegalStateException();
-        mCallbacks = callbacks;
     }
 
     private class UsbReceiver {
@@ -232,7 +229,9 @@ public class UsbGpsConverter {
 
 
         private void requestPermission(UsbDevice d) {
-            if (DBG) Log.d(TAG, "requestPermission() device=" + d.toString());
+            if (DBG) {
+                Log.d(TAG, "requestPermission() device=" + d.toString() + " name=" + d.getDeviceName());
+            }
             final PendingIntent premissionIntent = PendingIntent.getBroadcast(mContext,
                     0, new Intent(ACTION_USB_PERMISSION), 0);
             mUsbManager.requestPermission(d, premissionIntent);
@@ -314,6 +313,9 @@ public class UsbGpsConverter {
             @GuardedBy("UsbReceiver.this.mLock")
             private volatile boolean cancelRequested;
 
+            @GuardedBy("UsbReceiver.this.mLock")
+            private volatile boolean mFirstValidLocationReceived;
+
             private final ConditionVariable mIsControllerSet;
 
             @GuardedBy("UsbReceiver.this.mLock")
@@ -333,6 +335,7 @@ public class UsbGpsConverter {
                 mUsbController = null;
                 mAutobaudThread = null;
                 mIsControllerSet = new ConditionVariable(false);
+                mFirstValidLocationReceived = false;
                 native_create();
             }
 
@@ -343,6 +346,7 @@ public class UsbGpsConverter {
                     mUsbController.detach();
                 }
                 mUsbController = controller;
+                mFirstValidLocationReceived = false;
                 if (controller != null) mIsControllerSet.open();
             }
 
@@ -354,7 +358,6 @@ public class UsbGpsConverter {
             public void cancel() {
                 if (DBG) assertTrue(Thread.holdsLock(mLock));
                 cancelRequested = true;
-                mCallbacks.onStopped();
                 setController(null);
             }
 
@@ -393,13 +396,16 @@ public class UsbGpsConverter {
                         connectLoop();
 
                         setState(TransportState.CONNECTED);
+                        mBroadcastManager.sendBroadcast(new Intent(ACTION_USB_ATTACHED));
+                        mBroadcastManager.sendBroadcast(new Intent(ACTION_AUTOCONF_STARTED));
+
                         startInitBaudrate();
                         native_read_loop(mInputStream, mOutputStream);
                         throwIfCancelRequested();
 
                         synchronized(this) {
                             setState(TransportState.RECONNECTING);
-                            mCallbacks.onConnectionLost();
+                            mBroadcastManager.sendBroadcast(new Intent(ACTION_USB_DETACHED));
                             wait(RECONNECT_TIMEOUT_MS);
                         }
                     }
@@ -469,6 +475,12 @@ public class UsbGpsConverter {
                     }
 
                     mLocationProvider.setLocation(mReportedLocation);
+
+                    if (!mFirstValidLocationReceived) {
+                        mFirstValidLocationReceived = true;
+                        mBroadcastManager.sendBroadcast(new Intent(ACTION_VALID_LOCATION_RECEIVED));
+                    }
+
                     if (DBG) Log.v(TAG, "loc: " + mReportedLocation);
                 } catch(Exception e) {
                     e.printStackTrace();
@@ -541,6 +553,7 @@ public class UsbGpsConverter {
                                 (isSuccessful ? "successful" : "failed") + " " + baudrate);
                         mAutobaudThread = null;
                         native_msg_rcvd_cb(false);
+                        mBroadcastManager.sendBroadcast(new Intent(ACTION_AUTOCONF_STOPPED));
                         if (!isSuccessful) {
                             // XXX: report error
                             UsbServiceThread.this.cancel();

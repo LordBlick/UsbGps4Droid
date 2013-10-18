@@ -28,13 +28,8 @@ import android.app.DialogFragment;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
-import android.hardware.usb.UsbManager;
 import android.os.Bundle;
-import android.os.StrictMode;
-import android.os.StrictMode.ThreadPolicy;
-import android.os.StrictMode.VmPolicy;
 import android.preference.PreferenceActivity;
-import android.preference.PreferenceManager;
 import android.text.method.LinkMovementMethod;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -46,10 +41,10 @@ import android.widget.TextView;
  * @author Herbert von Broeuschmeul
  *
  */
-public class UsbGpsActivity extends PreferenceActivity implements SettingsFragment.Callbacks {
+public class SettingsActivity extends PreferenceActivity implements SettingsFragment.Callbacks {
 
     private static final boolean DBG = BuildConfig.DEBUG & true;
-    private static final String TAG = UsbGpsActivity.class.getSimpleName();
+    private static final String TAG = SettingsActivity.class.getSimpleName();
 
 	/** Called when the activity is first created. */
     @Override
@@ -57,28 +52,12 @@ public class UsbGpsActivity extends PreferenceActivity implements SettingsFragme
         super.onCreate(savedInstanceState);
 
         if (savedInstanceState == null) {
-            PreferenceManager.setDefaultValues(this,
-                    R.xml.pref, false);
-            SettingsFragment.DataLoggerSettings.setDefaultValues(this, false);
-
-            if (DBG) {
-                StrictMode.setThreadPolicy(new ThreadPolicy.Builder()
-                    .detectAll().penaltyLog(). penaltyFlashScreen().build());
-                StrictMode.setVmPolicy(new VmPolicy.Builder().detectAll().penaltyLog().build());
-            }
-
+            UsbControlActivity.InitApp(this);
             getFragmentManager().beginTransaction().replace(android.R.id.content,
                     new SettingsFragment()).commit();
-            proxyIfUsbAttached(getIntent());
+
         }
    }
-
-    @Override
-    protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        proxyIfUsbAttached(intent);
-    }
-
 
 	@Override
     public void displayAboutDialog(){
@@ -106,18 +85,6 @@ public class UsbGpsActivity extends PreferenceActivity implements SettingsFragme
         intent.putExtra(key, enabled);
         startService(intent);
     }
-
-    private void proxyIfUsbAttached(Intent intent) {
-
-        if (intent == null) return;
-
-        if (!UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) return;
-
-        final Intent proxyIntent = new Intent(UsbGpsConverter.ACTION_USB_DEVICE_ATTACHED);
-        proxyIntent.putExtras(intent.getExtras());
-        sendBroadcast(proxyIntent);
-    }
-
 
 	public static class AboutDialogFragment extends DialogFragment {
 

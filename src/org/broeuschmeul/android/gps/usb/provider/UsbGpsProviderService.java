@@ -24,8 +24,6 @@
  */
 package org.broeuschmeul.android.gps.usb.provider;
 
-import android.app.Notification;
-import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -33,7 +31,6 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.preference.PreferenceManager;
 import android.util.Log;
-import android.widget.Toast;
 
 import org.broeuschmeul.android.gps.usb.SerialLineConfiguration;
 
@@ -85,12 +82,14 @@ public class UsbGpsProviderService extends Service {
 	public static final String PREF_SIRF_ENABLE_NMEA = "enableNMEA";
 	public static final String PREF_SIRF_ENABLE_STATIC_NAVIGATION = "enableStaticNavigation";
 
+	private Notificator mNotificator;
 	private UsbGpsConverter mConverter;
 
 	@Override
 	public void onCreate() {
 		super.onCreate();
 		mConverter = new UsbGpsConverter(this);
+		mNotificator = new Notificator(this);
 	}
 
 	@Override
@@ -117,6 +116,8 @@ public class UsbGpsProviderService extends Service {
     @Override
     public void onDestroy() {
         stop();
+        mNotificator = null;
+        mConverter = null;
     }
 
 
@@ -152,10 +153,9 @@ public class UsbGpsProviderService extends Service {
         mConverter.setSerialLineConfiguration(usbSerialLineConf);
         mConverter.start();
 
-        Notification notification = createForegroundNotification();
-        startForeground(R.string.foreground_gps_provider_started_notification, notification);
-
-        Toast.makeText(this, this.getString(R.string.msg_gps_provider_started), Toast.LENGTH_SHORT).show();
+        startForeground(Notificator.FOREGROUND_NOTIFICATION_ID,
+                mNotificator.createForegroundNotification());
+        mNotificator.onServiceStarted();
     }
 
     private void processStopGpsProvider() {
@@ -173,29 +173,7 @@ public class UsbGpsProviderService extends Service {
 
         if (isServiceStarted()) {
             mConverter.stop();
-
-            Toast.makeText(this, R.string.msg_gps_provider_stopped, Toast.LENGTH_SHORT)
-            .show();
-
+            mNotificator.onServiceStopped();
         }
     }
-
-
-    @SuppressWarnings("deprecation")
-    private Notification createForegroundNotification() {
-        CharSequence text = getText(R.string.foreground_gps_provider_started_notification);
-
-        Notification notification = new Notification(R.drawable.ic_stat_notify,
-                text, System.currentTimeMillis());
-
-        PendingIntent contentIntent = PendingIntent.getActivity(this, 0,
-                new Intent(this, UsbGpsActivity.class), 0);
-
-        notification.setLatestEventInfo(this,
-                getText(R.string.foreground_gps_provider_started_notification), text, contentIntent);
-
-        return notification;
-    }
-
-
 }

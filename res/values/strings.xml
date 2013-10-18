@@ -98,25 +98,36 @@
     <string name="pref_enable_static_navigation_summary_off">Static Navigation disabled</string>
     <string name="pref_enable_static_navigation_summary_on">Static Navigation enabled</string>
 
-    <string name="msg_gps_provider_started">Usb GPS... started</string>
-    <string name="msg_gps_provider_stopped">Usb GPS... stopped</string>
-    <string name="msg_gps_provider_already_started">Usb GPS... is already on</string>
-    <string name="msg_gps_provider_stopped_by_problem">"Cannot start: %s"</string>
-    <string name="msg_two_many_connection_problems">Too many connection problems</string>
+
     <string name="msg_gps_provider_disabled">GPS is disabled</string>
 <!--     <string name="msg_bluetooth_unsupported">Bluetooth is not supported</string> -->
 <!--     <string name="msg_bluetooth_disabled">Bluetooth is disabled</string> -->
     <string name="msg_mock_location_disabled">Mock locations disabled</string>
     <string name="msg_gps_unavaible">Cannot connect to USB GPS</string>
-    <string name="foreground_gps_provider_started_notification">UsbGps service started</string>
-    <string name="connection_problem_notification_title">UsbGps: connection problem</string>
-    <plurals name="connection_problem_notification">
-    	<item quantity="one">Will retry one more time before closing</item>
-    	<item quantity="other">Will retry %d more times before closing</item>
-    </plurals>
-    <string name="service_closed_because_connection_problem_notification_title">UsbGps stopped</string>
-    <string name="service_closed_because_connection_problem_notification">"Reason: %s"</string>
+    
+    <string name="foreground_notification_title_gps_provider_started">UsbGps service started</string>
+    <string name="foreground_notification_text_please_plug_in_gps_receiver">Please plug in a USB GPS receiver</string>
+    
+    <string name="foreground_notification_title_usb_gps_attached">USB GPS receiver attached</string>
+    <string name="foreground_notification_text_usb_gps_attached">USB GPS receiver attached</string>
+    
+	<string name="foreground_notification_title_usb_gps_detached">USB GPS receiver detached</string>
+    <string name="foreground_notification_text_lost_connection">Lost connection to USB GPS receiver</string>
+    
+    <string name="foreground_notification_title_autodetect">USB GPS Receiver identification</string>
+    <string name="foreground_notification_text_autodetect">USB GPS Receiver identification</string>
+    
+	<string name="foreground_notification_title_autodetect_complete">USB GPS Receiver identification complete</string>
+    <string name="foreground_notification_text_autodetect_complete">USB GPS identification complete</string>
+    
+	<string name="foreground_notification_title_running">USB GPS Receiver running</string>
+    <string name="foreground_notification_text_running">USB GPS Receiver running</string>
+    <string name="foreground_notification_text_has_known_location">Has known location</string>
+    
     <string name="msg_failed_to_autobaud">Failed to autobaud</string>
+
+	<string name="msg_usb_gps_attached">USB GPS receiver attached</string>
+    <string name="msg_lost_connection_to_usb_receiver">Lost connection to USB GPS receiver</string>
     
     <string name="about_title">About</string>
     <string name="about_version">UsbGPS4Droid version</string>
