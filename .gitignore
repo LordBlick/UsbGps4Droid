@@ -1,5 +1,11 @@
 /bin
 /gen
+/libs/armeabi-v7a
+/libs/armeabi
+/libs/mips
+/libs/x86
+/obj
+/proguard
 #*.dex
 #*.apk
 #resources.ap_
